@@ -11,3 +11,9 @@ wheels/
 
 # Datasets
 data/
+
+# Pipeline outputs
+mlflow.db
+mlruns/
+mlartifacts/
+outputs/

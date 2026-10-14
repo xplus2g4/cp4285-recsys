@@ -1,0 +1,13 @@
+# Preprocess parameters (spec §4, §8). Recorded in data/processed/<split>/manifest.json.
+split_seed = 4285
+calibration_frac = 0.3
+watch_ratio_cap = 1.0
+n_bins = 5
+head_frac = 0.2
+min_history = 5
+
+[clickbait]
+min_support = 20
+click_rate_q = 0.75
+watch_ratio_q = 0.25
+hate_rate_q = 0.90

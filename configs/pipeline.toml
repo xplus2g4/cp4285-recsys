@@ -1,0 +1,10 @@
+# Pipeline-owned settings, identical across methods (spec §5.1, §8).
+# There is no per-experiment override path; CLI --pipeline.* overrides tag the run pipeline_override=true.
+tuning_budget = 9
+sweep_seed = 0
+final_seeds = [0, 1, 2, 3, 4]
+k_max = 100
+mask_train_seen = true
+deterministic = true
+tracking_uri = "sqlite:///mlflow.db"
+experiment = "kuairand-bias-panel"

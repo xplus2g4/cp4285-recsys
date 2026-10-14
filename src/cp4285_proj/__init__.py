@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from cp4285-proj!")
+"""Bias-panel pipeline on KuaiRand-Pure (see docs/spec_pipeline.md)."""

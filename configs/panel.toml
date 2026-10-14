@@ -1,0 +1,92 @@
+# The editable metric panel (spec §7). This file is the only place the panel is defined.
+#   add a metric:  one @register_metric function + one [[metric]] table here
+#   drop a metric: delete its table
+# `kr-evaluate` reruns the panel on saved predictions; no retraining. Results go to
+# outputs/runs/<run_id>/eval/<split>/<panel_hash>/.
+#
+# List-valued parameters and labels = "all" expand into a cross product.
+# labels = "all" expands to eval_labels, skipping labels without a binary relevance for metrics that need one.
+
+eval_labels = ["click", "long_view", "watch_ratio", "raw_watch_time", "satisfaction"]
+bootstrap = { resamples = 1000, seed = 0, ci = 0.95 }
+
+# --- accuracy (within the random candidate set)
+[[metric]]
+name = "gauc"
+labels = "all"
+
+[[metric]]
+name = "ndcg"
+k = [10, 20]
+labels = "all"
+
+# --- popularity
+[[metric]]
+name = "arp"
+k = [10, 20]
+
+[[metric]]
+name = "aplt"
+k = [10, 20]
+
+[[metric]]
+name = "gini"
+k = [10, 20]
+
+[[metric]]
+name = "rsp_pop"
+k = [10, 20]
+
+[[metric]]
+name = "reo_pop"
+k = [10, 20]
+labels = "all"
+
+# --- duration
+[[metric]]
+name = "list_duration"
+k = [10, 20]
+labels = "all"
+
+[[metric]]
+name = "wasserstein_duration"
+k = [10, 20]
+labels = "all"
+
+[[metric]]
+name = "rsp_dur"
+k = [10, 20]
+
+[[metric]]
+name = "reo_dur"
+k = [10, 20]
+labels = "all"
+
+# --- exposure / coverage
+[[metric]]
+name = "coverage"
+k = [10, 20]
+
+[[metric]]
+name = "exposure_entropy"
+k = [10, 20]
+
+# --- user groups
+[[metric]]
+name = "ndcg_by_group"
+k = [10, 20]
+labels = "all"
+grouping = ["activity", "mainstream", "dur_pref"]
+
+[[metric]]
+name = "calibration_kl_pop"
+k = [10, 20]
+
+[[metric]]
+name = "calibration_kl_dur"
+k = [10, 20]
+
+# --- clickbait (secondary)
+[[metric]]
+name = "clickbait_share"
+k = [10, 20]
