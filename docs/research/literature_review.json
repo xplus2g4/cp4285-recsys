@@ -1,0 +1,594 @@
+{
+  "spec": "docs/spec.md",
+  "generated": "2026-10-14",
+  "note": "paper_path is null when no legal open-access PDF was found; see the summary's 'Source basis' line.",
+  "papers": [
+    {
+      "id": "zhang2021pda",
+      "title": "Causal Intervention for Leveraging Popularity Bias in Recommendation",
+      "authors": "Yang Zhang, Fuli Feng, Xiangnan He, Tianxin Wei, Chonggang Song, Guohui Ling, Yongdong Zhang",
+      "venue": "SIGIR 2021",
+      "year": 2021,
+      "url": "https://arxiv.org/abs/2105.06067",
+      "topic": "popularity bias",
+      "paper_path": "docs/literature/papers/zhang2021pda.pdf",
+      "summary_path": "docs/literature/zhang2021pda.md",
+      "relevance": "This is the main method for the §5 Popularity row. PD trains with the score ELU'(f)·m^γ and then ranks by ELU'(f) alone. PDA re-injects forecast popularity^γ̃ at inference. Together they give a one-knob popularity sweep for the §7 Pareto frontiers. The causal graph has popularity as the only confounder and no duration node, which makes PDA a prime candidate for H1/RQ3 spill-over into duration. Its gains were measured on time-split test data that still carries popularity bias (one dataset is Kwai/Kuaishou), which is exactly the contrast RQ1 tests on the random-exposure log.",
+      "follow_ups": [
+        "Implement PD/PDA with local (per-stage) popularity, since the global-popularity variant PD-G is far worse. Sweep the training γ over [0.02, 0.25] in steps of 0.02 and the inference γ̃ from 0 (which equals PD) upward, as in §4.1.3.",
+        "Reuse PDA's Recommendation Rate over 10 equal-popularity-mass item groups as the baseline view for the §7 mass-shift plot, and extend it to the popularity × duration grid.",
+        "Compare PDA accuracy on KuaiRand's time-split standard test against the random-exposure log, to measure how much of its gain comes from re-injected popularity.",
+        "Read DICE (Zheng et al., WWW'21). PDA shows that DICE over-suppresses the most popular groups and over-amplifies mid-popularity groups, which matters for the optional DICE extension."
+      ],
+      "spec_corrections": [
+        "The spec calls γ the 'PDA inference exponent'. In the paper γ is the training exponent and γ̃ is a separate inference exponent: γ̃ = γ in practice, and γ̃ = 0 gives PD. The knob description should name both or specify γ̃."
+      ]
+    },
+    {
+      "id": "zhao2022popularity",
+      "title": "Popularity Bias Is Not Always Evil: Disentangling Benign and Harmful Bias for Recommendation",
+      "authors": "Zihao Zhao, Jiawei Chen, Sheng Zhou, Xiangnan He, Xuezhi Cao, Fuzheng Zhang, Wei Wu",
+      "venue": "IEEE TKDE (DOI 10.1109/TKDE.2022.3218994)",
+      "year": 2022,
+      "url": "https://arxiv.org/abs/2109.07946",
+      "topic": "popularity bias",
+      "paper_path": "docs/literature/papers/zhao2022popularity.pdf",
+      "summary_path": "docs/literature/zhao2022popularity.md",
+      "relevance": "TIDE splits popularity into static item quality q_i and time-decayed conformity c_i^t, and removes only the conformity part at inference. The key evidence for this project: PDA beats PD on click prediction but does worse than PD on rating-based preference prediction (e.g. Douban PP-Pre@3 0.4216 vs 0.4254). This supports §4/RQ1: the evaluation target decides whether popularity correction looks helpful. TIDE's static q_i would also absorb persistent item attributes such as duration, a concrete mechanism for H1/RQ3.",
+      "follow_ups": [
+        "Evaluate PDA on KuaiRand with both a click label and a satisfaction label (long_view or watch ratio), mirroring TIDE's click vs. preference split.",
+        "Optionally add TIDE-int as a third popularity method. Its knobs are the inference conformity constant c (0 in the paper) and the temperature τ.",
+        "Check whether a learned per-item quality term correlates with duration on KuaiRand.",
+        "Use Kendall τ between item scores and an external quality proxy, as in the paper's Table 5, as a diagnostic."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "wei2021macr",
+      "title": "Model-Agnostic Counterfactual Reasoning for Eliminating Popularity Bias in Recommender System",
+      "authors": "Tianxin Wei, Fuli Feng, Jiawei Chen, Ziwei Wu, Jinfeng Yi, Xiangnan He",
+      "venue": "KDD 2021",
+      "year": 2021,
+      "url": "https://arxiv.org/abs/2010.15363",
+      "topic": "popularity bias",
+      "paper_path": "docs/literature/papers/wei2021macr.pdf",
+      "summary_path": "docs/literature/wei2021macr.md",
+      "relevance": "This is the second popularity method in §5. At training the score is ŷ_k·σ(ŷ_i)·σ(ŷ_u); at inference MACR subtracts c·σ(ŷ_i)·σ(ŷ_u), removing the whole direct item effect. The knob is c, which on Adressa improves up to about 29 and then degrades. Section 3.5 states that other item causes are ignored, so on KuaiRand the item branch will also absorb duration-driven propensity (H1/RQ3). The adjustment scales with σ(ŷ_u), which rises with user activity, so user-group gaps by activity are expected (H3). The paper's 'debiased' test is an item-uniform resample of logged data, not random exposure.",
+      "follow_ups": [
+        "Sweep MACR's c over a grid that covers roughly 0–40, following the Fig. 7 shape, and tune α and β for the auxiliary losses.",
+        "Measure per-duration-quantile recommendation share for MACR versus the naive model in the §7 mass-shift plot.",
+        "Report MACR's NDCG gap by user_active_degree, since σ(ŷ_u) tracks activity.",
+        "Check whether MACR's large gains on item-uniform resampled tests survive on KuaiRand's random-exposure log."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "zhu2021popopp",
+      "title": "Popularity-Opportunity Bias in Collaborative Filtering",
+      "authors": "Ziwei Zhu, Yun He, Xing Zhao, Yin Zhang, Jianling Wang, James Caverlee",
+      "venue": "WSDM 2021",
+      "year": 2021,
+      "url": "https://doi.org/10.1145/3437963.3441820",
+      "topic": "popularity bias",
+      "paper_path": "docs/literature/papers/zhu2021popopp.pdf",
+      "summary_path": "docs/literature/zhu2021popopp.md",
+      "relevance": "The paper defines equal-opportunity popularity bias with two metrics. PRU is the negated Spearman correlation between popularity and rank over each user's liked test items, averaged over users. PRI is the negated Spearman correlation between item popularity and the item's average rank among users who like it. It also proposes Popularity Compensation (PC) and a correlation regulariser. It does NOT define PopRSP/PopREO: those come from Zhu, Wang, Caverlee, SIGIR 2020 (RSP/REO, DOI 10.1145/3397271.3401177), as implemented with popularity groups in Elliot. PRU/PRI give continuous, group-free metrics for §6 and transfer directly to duration. PDA's 'BPR-PC' baseline is this paper's PC.",
+      "follow_ups": [
+        "Fix the §6 metric citation and use the RSP/REO definitions from SIGIR'20: RSP = std/mean over groups of P(R@k|g); REO = std/mean over groups of P(R@k|g, y=1). Choose the groups explicitly (Elliot's default is top 20% vs. the rest).",
+        "Add PRU/PRI and duration analogues (Spearman of duration vs. rank over test positives) as quantile-free alternatives to DurRSP/DurREO.",
+        "Read Zhu, Wang, Caverlee SIGIR 2020, 'Measuring and Mitigating Item Under-Recommendation Bias in Personalized Ranking Systems', for the exact RSP/REO definitions.",
+        "Optionally use Popularity Compensation (α in [0.1, 1.5], β in [0, 1]) as a cheap post-hoc popularity knob in the Pareto sweeps."
+      ],
+      "spec_corrections": [
+        "The spec credits 'PopRSP / PopREO (Zhu et al. WSDM '21)', but the WSDM'21 paper defines PRU/PRI. RSP/REO come from Zhu, Wang, Caverlee, SIGIR 2020 (DOI 10.1145/3397271.3401177). The 'Pop-' variants are the Elliot framework's popularity-group implementation of those metrics.",
+        "The assignment's author list 'Zhu, Wang, Caverlee' for the WSDM'21 paper is incomplete. The actual authors are Ziwei Zhu, Yun He, Xing Zhao, Yin Zhang, Jianling Wang, James Caverlee. 'Zhu, Wang, Caverlee' is the author list of the SIGIR'20 RSP/REO paper."
+      ]
+    },
+    {
+      "id": "abdollahpouri2019unfairness",
+      "title": "The Unfairness of Popularity Bias in Recommendation",
+      "authors": "Himan Abdollahpouri, Masoud Mansoury, Robin Burke, Bamshad Mobasher",
+      "venue": "RMSE workshop at ACM RecSys 2019 (CEUR-WS)",
+      "year": 2019,
+      "url": "https://arxiv.org/abs/1907.13286",
+      "topic": "popularity bias",
+      "paper_path": "docs/literature/papers/abdollahpouri2019unfairness.pdf",
+      "summary_path": "docs/literature/abdollahpouri2019unfairness.md",
+      "relevance": "This paper is the source of the Niche/Diverse/Blockbuster user grouping (bottom 20%, middle, top 20% by profile share of the top-20% popular items) and of ΔGAP = (GAP_r − GAP_p)/GAP_p, a user-side popularity-calibration metric for §6/H3. On MovieLens 1M, niche users get the largest ΔGAP under every algorithm, and niche users also have the largest profiles. The paper is a descriptive audit of baselines only: no debiasing method is evaluated, so it says nothing about mainstream users losing out under debiasing.",
+      "follow_ups": [
+        "Add ΔGAP per mainstreaminess group to the §6 user-side metrics, plus a duration analogue (average duration of the list vs. the user's history).",
+        "Check the overlap between user_active_degree and mainstreaminess groups on KuaiRand, since the paper finds niche users are the most active.",
+        "Treat H3's 'mainstream users lose accuracy' as a hypothesis to test, not a cited prior finding."
+      ],
+      "spec_corrections": [
+        "Misattribution: the assignment says 'Abdollahpouri et al. showed that popularity debiasing helps niche users but can underserve mainstream users'. Neither Abdollahpouri paper supports this. The 2019 paper and the RecSys 2020 paper both show only that biased baseline algorithms under-serve niche users (largest ΔGAP / popularity lift, and highest miscalibration in 2020). Neither evaluates any debiasing method or reports accuracy by user group, so neither shows debiasing hurting mainstream users. That part of H3 is an untested hypothesis, and the claim should be reworded, e.g. 'Abdollahpouri et al. (2019; 2020) showed popularity bias disproportionately under-serves niche users'."
+      ]
+    },
+    {
+      "id": "abdollahpouri2020connection",
+      "title": "The Connection Between Popularity Bias, Calibration, and Fairness in Recommendation",
+      "authors": "Himan Abdollahpouri, Masoud Mansoury, Robin Burke, Bamshad Mobasher",
+      "venue": "ACM RecSys 2020 (Late-Breaking Results)",
+      "year": 2020,
+      "url": "https://arxiv.org/abs/2008.09273",
+      "topic": "popularity bias",
+      "paper_path": "docs/literature/papers/abdollahpouri2020connection.pdf",
+      "summary_path": "docs/literature/abdollahpouri2020connection.md",
+      "relevance": "The paper defines popularity lift PL(G) = (GAP_q − GAP_p)/GAP_p over 10 user groups sorted by profile average popularity, and genre miscalibration as a Hellinger distance (Steck-style calibration). For every algorithm, the most niche group G1 has much higher PL and MC than G10; for example, MovieLens ItemKNN gives PL 12.19 vs 0.458 and MC 0.418 vs 0.250. It also shows the mechanism 'popular item → its genres get over-represented', the same mechanism H1/RQ3 proposes for popularity ↔ duration. Like the 2019 paper, it evaluates no debiasing method.",
+      "follow_ups": [
+        "Report per-group popularity lift on 10 mainstreaminess deciles in §6.",
+        "Decide between KL (spec, Steck) and Hellinger for the calibration error and document the choice. Hellinger is bounded and handles zero-probability bins.",
+        "Test the 'popular item drags its features' mechanism on KuaiRand: does reducing popularity concentration change the recommended duration distribution?",
+        "Note that on Yahoo Movies, G10 PL is negative for every algorithm (−0.25 to −0.871), so blockbuster users are not always over-served even by baselines."
+      ],
+      "spec_corrections": [
+        "Neither this paper nor the 2019 one supports the claim that popularity debiasing 'underserves mainstream users'. Both are baseline audits showing that niche users are hurt by popularity bias. This paper uses Hellinger distance over genres, not KL, for miscalibration."
+      ]
+    },
+    {
+      "id": "schnabel2016treatments",
+      "title": "Recommendations as Treatments: Debiasing Learning and Evaluation",
+      "authors": "Tobias Schnabel, Adith Swaminathan, Ashudeep Singh, Navin Chandak, Thorsten Joachims",
+      "venue": "ICML",
+      "year": 2016,
+      "url": "https://arxiv.org/abs/1602.05352",
+      "topic": "exposure / selection bias (IPS, DR, uniform data)",
+      "paper_path": "docs/literature/papers/schnabel2016treatments.pdf",
+      "summary_path": "docs/literature/schnabel2016treatments.md",
+      "relevance": "This paper introduces the IPS and SNIPS estimators for recommendation, propensity-weighted MF (MF-IPS), and two propensity estimators: Naive Bayes, which needs an MCAR sample, and logistic regression on covariates. These two are the spec's 'popularity' vs 'feature-based' propensities in the §5 Exposure row. Its bias–variance bound (Thm 5.2: overestimating small propensities can help) is the theoretical basis for the clipping sweep and for the variance half of H2. It also introduced the Coat dataset (§10).",
+      "follow_ups": [
+        "Implement MF-IPS with both an NB-style propensity (calibrated on part of the random-log calibration split, as Schnabel uses 5% of the MCAR test) and an LR/feature propensity using KuaiRand user and video features.",
+        "Log Σ1/P̂² and max 1/P̂ per run as the variance term from Prop. 3.1 / Thm 4.2 for §6 exposure diagnostics.",
+        "Replicate the Table 2 numbers on Coat/Yahoo (MF-IPS MAE 0.810/0.860) as an implementation sanity check before running on KuaiRand.",
+        "Note that Schnabel tunes with IPS-weighted CV on MNAR data. The spec instead tunes on the random calibration split, so state this difference."
+      ],
+      "spec_corrections": [
+        "Spec §10 implies Yahoo!R3 and Coat come from 'prior multi-bias work'. In fact Coat was introduced by Schnabel et al. 2016 and Yahoo!R3 by Marlin & Zemel 2009. Both are explicit 1–5 rating datasets, not implicit/click data."
+      ]
+    },
+    {
+      "id": "swaminathan2015snips",
+      "title": "The Self-Normalized Estimator for Counterfactual Learning",
+      "authors": "Adith Swaminathan, Thorsten Joachims",
+      "venue": "NeurIPS (NIPS)",
+      "year": 2015,
+      "url": "https://papers.nips.cc/paper/2015/hash/39027dfad5138c9ca0c474d71db915c3-Abstract.html",
+      "topic": "exposure / selection bias (IPS, DR, uniform data)",
+      "paper_path": "docs/literature/papers/swaminathan2015snips.pdf",
+      "summary_path": "docs/literature/swaminathan2015snips.md",
+      "relevance": "This is the canonical SNIPS reference for the §5 Exposure row. It identifies 'propensity overfitting': the IPS ERM objective is gamed through the sum of weights Ŝ. SNIPS (Σwδ/Σw) avoids this; it is biased but consistent, bounded and equivariant. The paper treats clipping M as a separate, still-needed knob, and finds that variance regularisation still helps on top of SNIPS. This directly informs the H2 mechanism and the §6 exposure diagnostics.",
+      "follow_ups": [
+        "Add a Ŝ = mean(1/P̂) diagnostic (expected ≈ 1 after normalisation) to the propensity sanity checks on the calibration split.",
+        "Sweep the clip threshold for both IPS and SNIPS so that clipping and self-normalisation effects are separable on the frontier.",
+        "Compare seed std of IPS vs SNIPS as a direct test of H2's variance claim.",
+        "Read the CRM/POEM paper (Swaminathan & Joachims, ICML 2015) if a variance-regularised variant is wanted."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "wang2019doubly",
+      "title": "Doubly Robust Joint Learning for Recommendation on Data Missing Not at Random",
+      "authors": "Xiaojie Wang, Rui Zhang, Yu Sun, Jianzhong Qi",
+      "venue": "ICML (PMLR 97)",
+      "year": 2019,
+      "url": "https://proceedings.mlr.press/v97/wang19n.html",
+      "topic": "exposure / selection bias (IPS, DR, uniform data)",
+      "paper_path": "docs/literature/papers/wang2019doubly.pdf",
+      "summary_path": "docs/literature/wang2019doubly.md",
+      "relevance": "This is the spec's named DR method (§5 Exposure row). It defines the DR estimator and MF-DR-JL, which jointly trains the predictor and a 1/p̂-weighted error-imputation model. It is unbiased if either propensities or imputation are accurate, and its tail bound beats IPS when 0≤ê≤2e. Fig. 4 sweeps propensity variance and shows DR degrading more slowly than IPS, which bears on H2 and on §10 propensity misspecification. Table 5 shows clipped IPS (NCIS) as the most biased estimator.",
+      "follow_ups": [
+        "Implement MF-DR-JL (Alg. 1), sharing the exact p̂ used by IPS/SNIPS so that only the estimator varies.",
+        "Reproduce the Fig. 4-style propensity-variance sweep using our clip threshold, and plot seed std for IPS/SNIPS/DR.",
+        "Log the fraction of pairs with 0≤ê≤2e as a DR health diagnostic.",
+        "Verify that DR gains transfer from rating MSE to binary/ratio labels and ranking metrics (GAUC/NDCG); the paper evaluates MSE/MAE only."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "chen2021autodebias",
+      "title": "AutoDebias: Learning to Debias for Recommendation",
+      "authors": "Jiawei Chen, Hande Dong, Yang Qiu, Xiangnan He, Xin Xin, Liang Chen, Guli Lin, Keping Yang",
+      "venue": "SIGIR",
+      "year": 2021,
+      "url": "https://arxiv.org/abs/2105.04170",
+      "topic": "exposure / selection bias (IPS, DR, uniform data)",
+      "paper_path": "docs/literature/papers/chen2021autodebias.pdf",
+      "summary_path": "docs/literature/chen2021autodebias.md",
+      "relevance": "This is the §5 Joint reference method. It unifies IPS, imputation, DR, and conformity/exposure/position corrections as reweighting (w1) plus imputation (w2, m), and meta-learns these on a small uniform set via bi-level optimisation. In the paper the uniform set is 5% of the random data, with a separate 5% for validation. The learned item weights decrease with popularity, and gains concentrate on unpopular items (Fig. 5). So AutoDebias acts as an implicit popularity correction whose duration side-effects are unknown, which is relevant to the RQ2/RQ3 mass-shift analysis and to H3.",
+      "follow_ups": [
+        "Split the 30% calibration split into a D_U part for meta-learning and a disjoint validation part for hyperparameters, mirroring the paper's 5%/5% split, to avoid selecting on the meta-training data.",
+        "Meta-learn φ separately per training label (§4), and check whether gains hold under the other evaluation labels.",
+        "Try adding video duration (bucket one-hot) to x_i in the w1 meta-model as an extension, and see whether it changes the duration column of the audit.",
+        "Report max w1 / ESS, since the weights are unclipped exp(·); compare against Fig. 5a's popularity–weight trend on KuaiRand.",
+        "Use the official code at github.com/DongHande/AutoDebias."
+      ],
+      "spec_corrections": [
+        "Spec §2 says the calibration split is used for both hyperparameter selection and AutoDebias meta-learning. The paper keeps these disjoint (5% uniform for meta-learning, 5% for validation), and the spec should specify a sub-split."
+      ]
+    },
+    {
+      "id": "marlin2009yahoo",
+      "title": "Collaborative Prediction and Ranking with Non-Random Missing Data",
+      "authors": "Benjamin M. Marlin, Richard S. Zemel",
+      "venue": "ACM RecSys",
+      "year": 2009,
+      "url": "https://doi.org/10.1145/1639714.1639717",
+      "topic": "exposure / selection bias (IPS, DR, uniform data)",
+      "paper_path": "docs/literature/papers/marlin2009yahoo.pdf",
+      "summary_path": "docs/literature/marlin2009yahoo.md",
+      "relevance": "This paper is the origin of the Yahoo! R3 dataset, the optional §10 replication target. It has 15,400 users and 1,000 songs; 5,400 survey users each rated exactly 10 random songs (54,000 random ratings), alongside about 250k user-selected ratings. It is also the methodological precedent for the spec's train-on-biased/test-on-random design. Models that win on user-selected test data (plain MM) lose on random test data, and vice versa. Logit-vd's per-item missingness offset is an early item-exposure propensity.",
+      "follow_ups": [
+        "When replicating on Yahoo!R3, use the standard Webscope split; note that Marlin reports ~250k user-selected ratings while later papers use 311,704 training ratings, and record the version used.",
+        "Report KuaiRand results on both a standard-log holdout and the random test, to show whether method rankings reverse as in Marlin & Zemel.",
+        "Optionally cite the UAI 2007 Marlin et al. paper for the original MAR-violation evidence."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "zhan2022d2q",
+      "title": "Deconfounding Duration Bias in Watch-time Prediction for Video Recommendation",
+      "authors": "Ruohan Zhan, Changhua Pei, Qiang Su, Jianfeng Wen, Xueliang Wang, Guanyu Mu, Dong Zheng, Peng Jiang",
+      "venue": "KDD 2022",
+      "year": 2022,
+      "url": "https://arxiv.org/abs/2206.06003",
+      "topic": "duration, clickbait and conformity bias",
+      "paper_path": "docs/literature/papers/zhan2022d2q.pdf",
+      "summary_path": "docs/literature/zhan2022d2q.md",
+      "relevance": "This is the main duration method in the §5 Duration row. Its knob is the number of equal-frequency duration groups M ∈ {1,10,20,30,50,100}, and accuracy peaks around M=20–30 (Table 2). It matters for H1, but its causal graph leaves out popularity, and it reports only MAE/XAUC/XGAUC, with no list-level duration or popularity metrics. It is evaluated only on proprietary Kuaishou logs, not on KuaiRand.",
+      "follow_ups": [
+        "Decide which D2Q score is ranked: the published output Φ̂_k⁻¹(h(u,v)), which is raw-scale watch time and keeps the D→W effect, or the within-group quantile h(u,v), which is duration-normalised. Report both, because H1's direction depends on the choice.",
+        "Sweep the number of duration buckets over {1,10,20,30,60} (60 is the KuaiRand setting used by D2Co/CWM). Expect a lower optimum than 30 because KuaiRand is small.",
+        "Implement Res-D2Q's duration-input requirement: duration must be a model feature, otherwise groups that share quantile labels cannot be told apart.",
+        "Use the reference implementation at https://github.com/MorganSQ/Ks-D2Q to check the label construction."
+      ],
+      "spec_corrections": [
+        "H1 and §5 group D2Q with watch-ratio labels as 'duration normalisation'. As published, D2Q is not a normalisation at inference: it predicts within-group quantiles and then maps them back to raw watch time with Φ̂_k⁻¹, explicitly keeping the duration→watch-time effect. Only the quantile-label variant (h(u,v), the spec's 'duration-quantile label') normalises. The spec should say which one 'D2Q' refers to.",
+        "Spec §7.3 says D2Q's mass may land in 'short' cells. The paper never measures where recommendations shift, so that is a hypothesis to test, not a documented property."
+      ]
+    },
+    {
+      "id": "zheng2022dvr",
+      "title": "DVR: Micro-Video Recommendation Optimizing Watch-Time-Gain under Duration Bias",
+      "authors": "Yu Zheng, Chen Gao, Jingtao Ding, Lingling Yi, Depeng Jin, Yong Li, Meng Wang",
+      "venue": "ACM MM 2022",
+      "year": 2022,
+      "url": "https://arxiv.org/abs/2208.05190",
+      "topic": "duration, clickbait and conformity bias",
+      "paper_path": "docs/literature/papers/zheng2022dvr.pdf",
+      "summary_path": "docs/literature/zheng2022dvr.md",
+      "relevance": "The paper supports H1's premise: watch percentage reverses duration bias toward short videos (Fig. 1b). It also gives a reference mass shift in recommendation share by duration: watch-time target vs. WTG target, with the 60-s share falling from about 52–56% to about 18–19% (Fig. 8). It is a textbook case of the §4 'change of definition' concern, because the headline gains come from training and evaluating on the same WTG target (the WTG label accounts for most of the gain in the Table 4 ablation). Data is WeChat Channels and the 2018 Kuaishou competition set, not KuaiRand.",
+      "follow_ups": [
+        "Add WTG (watch time z-scored within 1-s duration bins) as an extra duration label in the §4 label matrix and evaluate it on all labels.",
+        "Also measure the popularity metrics (ARP/Gini/APLT) for WTG-trained models. DVR keeps VideoPopularity as an input feature and never checks popularity side-effects, which makes it a direct RQ3 test case.",
+        "If DVR's adversarial term is used, sweep α over {0.1,0.2,0.3,0.4,0.5}. The paper conflicts on the best α (Fig. 9 suggests 0.3–0.4; §A.4 says 0.1).",
+        "Add #BC@K (recommended items watched for less than 2 s, here on the random log) next to the §6 clickbait metric."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "wang2021clickbait",
+      "title": "Clicks can be Cheating: Counterfactual Recommendation for Mitigating Clickbait Issue",
+      "authors": "Wenjie Wang, Fuli Feng, Xiangnan He, Hanwang Zhang, Tat-Seng Chua",
+      "venue": "SIGIR 2021",
+      "year": 2021,
+      "url": "https://arxiv.org/abs/2009.09945",
+      "topic": "duration, clickbait and conformity bias",
+      "paper_path": "docs/literature/papers/wang2021clickbait.pdf",
+      "summary_path": "docs/literature/wang2021clickbait.md",
+      "relevance": "Supplies the definition behind the §6 Clickbait metric: high click rate with low post-click satisfaction, measured by an item like/click ratio. It also motivates the click-vs-satisfaction rows of the §4 label matrix. The authors name the lack of an intervention-based unbiased test set as a limitation, and KuaiRand's random log fills that gap. IPW performs below naive training on the satisfaction label, which is prior evidence for H2-style accuracy loss. Not evaluated on KuaiRand.",
+      "follow_ups": [
+        "Define the KuaiRand clickbait item set from item-level statistics computed on the random log: high is_click rate with a low long_view/watch-ratio rate or a high is_hate rate (the analogue of the paper's like/click ratio < 0.5, Fig. 4).",
+        "Report how each method's top-K share of low like/click-ratio items changes compared with naive (the analogue of Fig. 6).",
+        "Do not implement CR itself. KuaiRand has no raw exposure-vs-content feature split (title/cover vs. content), so CR's two-branch model cannot be built faithfully. Cite it only as background for the metric."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "zheng2021dice",
+      "title": "Disentangling User Interest and Conformity for Recommendation with Causal Embedding",
+      "authors": "Yu Zheng, Chen Gao, Xiang Li, Xiangnan He, Depeng Jin, Yong Li",
+      "venue": "WWW 2021 (The Web Conference)",
+      "year": 2021,
+      "url": "https://arxiv.org/abs/2006.11011",
+      "topic": "duration, clickbait and conformity bias",
+      "paper_path": "docs/literature/papers/zheng2021dice.pdf",
+      "summary_path": "docs/literature/zheng2021dice.md",
+      "relevance": "This is the optional §5 extension. It disentangles interest and conformity embeddings using popularity-margin negative sampling (PNSM) and curriculum learning. Its Table 2 shows IPS variants swinging above and below the naive baseline across datasets and backbones, which is prior evidence for H2 and IPS instability. Its 'intervened' test set is inverse-popularity resampling of logged ratings, not real randomised exposure, so KuaiRand's is_rand log is a stronger evaluation. Not evaluated on KuaiRand and has no duration component.",
+      "follow_ups": [
+        "For the spec's 'remove the conformity embedding' test, use the paper's DICE-int variant (interest embeddings only) and also report full DICE (concatenated). Compare ARP/Gini/APLT and the NDCG gap across mainstreaminess groups (H3).",
+        "Reproduce the IOU-with-ItemPop diagnostic (Fig. 5a) on the KuaiRand random pool to show how much popularity DICE-con, DICE-int and PDA each encode.",
+        "Use the paper's settings α=0.1, β=0.01, 64-d per cause (128 total, matching the MF baseline size), margin/α decay 0.9 per epoch. Code: https://github.com/tsinghua-fib-lab/DICE",
+        "Check whether PNSM's popularity margins also shift duration mix through the §3 coupling, using the §7.3 heatmap."
+      ],
+      "spec_corrections": [
+        "Spec §5 says to test whether 'removing the conformity embedding reproduces the popularity trade-off'. The published DICE ranks with both embeddings concatenated; conformity removal is the paper's DICE-int analysis variant. The spec should name DICE-int explicitly rather than imply that DICE itself drops conformity."
+      ]
+    },
+    {
+      "id": "zhao2023d2co",
+      "title": "Uncovering User Interest from Biased and Noised Watch Time in Video Recommendation",
+      "authors": "Haiyuan Zhao, Lei Zhang, Jun Xu, Guohao Cai, Zhenhua Dong, Ji-Rong Wen",
+      "venue": "RecSys 2023",
+      "year": 2023,
+      "url": "https://arxiv.org/abs/2308.08120",
+      "topic": "duration, clickbait and conformity bias",
+      "paper_path": "docs/literature/papers/zhao2023d2co.pdf",
+      "summary_path": "docs/literature/zhao2023d2co.md",
+      "relevance": "**Evaluates on KuaiRand-Pure.** It benchmarks watch time, PCR (watch ratio), D2Q (implemented as a within-bin quantile label, 60 groups), WTG and D2Co on a temporal split of the standard logs, using the KuaiRand long_view label as ground truth. This narrows §11's novelty: the difference must come from evaluating on the random log, evaluating across labels, and measuring off-target popularity and exposure bias. It also proves which assumptions PCR, WTG and D2Q each need (§3.3) and shows on KuaiRand that PCR's linearity assumption fails (Fig. 2), which bears on H1 and the §4 labels.",
+      "follow_ups": [
+        "Add D2Co(S) as a duration label in §4 (GMM per duration value, moving-average window T ∈ {2,3,4}, α ∈ {−0.07,−0.05} on KuaiRand). Code: https://github.com/hyz20/D2Co.git",
+        "Reproduce their KuaiRand Table 2 (DeepFM GAUC: Watch Time 0.593, PCR 0.628, D2Q 0.635, WTG 0.635, D2Co(S) 0.656) on the standard-log split as a sanity check. Then rerun the same models on the random-log test split to see whether the ranking of duration labels survives.",
+        "Make the §6 clickbait 'low watch ratio' threshold depend on duration. Fig. 2b shows that watch time on is_hate records rises with duration on KuaiRand.",
+        "Note their KuaiRand filter (videos ≤ 240 s; 26,988 users / 6,598 videos / 1,266,560 interactions) when comparing numbers."
+      ],
+      "spec_corrections": [
+        "Spec §11 claims a per-label audit on KuaiRand is new. Prior work (D2Co, RecSys 2023; CWM, KDD 2024) already compares watch-time, watch-ratio, D2Q and WTG labels on KuaiRand-Pure. The novelty claim should be narrowed to random-log evaluation, cross-label evaluation, off-target bias metrics and the duration×popularity coupling.",
+        "Spec §4 'Long view: partly duration-normalised' matches D2Co's definition (d ≤ 18 s and w = d, or d > 18 s and w > 18 s). Note that D2Co uses long_view as its ground truth, so prior KuaiRand duration results are scored on a label that is itself derived from watch time."
+      ]
+    },
+    {
+      "id": "zhao2024cwm",
+      "title": "Counteracting Duration Bias in Video Recommendation via Counterfactual Watch Time",
+      "authors": "Haiyuan Zhao, Guohao Cai, Jieming Zhu, Zhenhua Dong, Jun Xu, Ji-Rong Wen",
+      "venue": "KDD 2024",
+      "year": 2024,
+      "url": "https://arxiv.org/abs/2406.07932",
+      "topic": "duration, clickbait and conformity bias",
+      "paper_path": "docs/literature/papers/zhao2024cwm.pdf",
+      "summary_path": "docs/literature/zhao2024cwm.md",
+      "relevance": "**Evaluates on KuaiRand-Pure.** It treats duration bias as right-censoring of a counterfactual watch time and fits a Tobit-style likelihood. Theorem 1 shows that no label transform such as PCR, WTG or D2Q can recover interest for completely played records. On KuaiRand, the duration-normalised baselines beat naive regression on videos under 30 s but fall below it on longer videos (Fig. 8). That gives a mechanism and prior evidence for H1's direction and is directly relevant to the §4 watch-ratio cap and the §5 Duration row.",
+      "follow_ups": [
+        "Report the share of KuaiRand records with play_time ≥ duration (CWM reports 17.5% completely played in its KuaiRand-Pure subset) in the standard log and in the random log, and how the watch-ratio cap treats them.",
+        "Optionally add CWM as a censored-label duration method with (c, σ) = (1/40, 2) for KuaiRand. Code: https://github.com/hyz20/CWM.git",
+        "Use its per-duration-bin improvement over naive (Fig. 8, 10 bins up to 400 s) as a 1-D precursor to the §7.4 'where accuracy comes from' grid.",
+        "Check Fig. 1's claim that the explicit-feedback rate among completed plays rises with duration on KuaiRand. If it holds on the random log, the §4 'Satisfaction' label is itself duration-correlated."
+      ],
+      "spec_corrections": [
+        "Same §11 novelty caveat as D2Co: duration-label debiasing has already been benchmarked on KuaiRand-Pure (standard logs, temporal split, watch-time-threshold ground truth). It has not been done on the random-exposure log.",
+        "Minor inconsistency in the prior work (not in the spec): CWM's KuaiRand statistics (26,988 / 6,598 / 1,266,560) are identical to D2Co's, although CWM says it filtered to ≤ 400 s and D2Co to ≤ 240 s. Similarly, the WeChat statistics in D2Co/CWM (20,000 / 96,418 / 7,310,108) equal the 'Kuaishou' row in DVR's Table 3. Do not rely on these counts. Recompute KuaiRand-Pure counts from the release."
+      ]
+    },
+    {
+      "id": "burke2017multisided",
+      "title": "Multisided Fairness for Recommendation",
+      "authors": "Robin Burke",
+      "venue": "FAT/ML Workshop 2017 (poster); arXiv:1707.00093",
+      "year": 2017,
+      "url": "https://arxiv.org/abs/1707.00093",
+      "topic": "multi-stakeholder fairness and calibration",
+      "paper_path": "docs/literature/papers/burke2017multisided.pdf",
+      "summary_path": "docs/literature/burke2017multisided.md",
+      "relevance": "Supplies the C/P/CP-fairness vocabulary that frames H3. Item-side popularity metrics are P-side outcomes, and the user-group NDCG gaps in §6 are C-side outcomes. Burke flags the effect of combining one-sided corrections on each stakeholder as an open question, which is a conceptual precursor of RQ2's off-diagonal audit. His list-diversity vs catalog-coverage distinction supports reporting both APLT and coverage@K/exposure entropy (§6 Exposure). Framing only: no metric or method to implement.",
+      "follow_ups": [
+        "Label §6 panel columns as provider-side (ARP, Gini, APLT, PopRSP/REO, coverage) vs consumer-side (user-group NDCG gap, calibration) in the audit matrix so H3 reads as a P→C trade-off",
+        "Report both list-level (APLT) and catalogue-level (coverage@K, exposure entropy) tail metrics, since Burke shows one can improve without the other",
+        "Optionally aggregate exposure at the KuaiRand author level to get a true provider-side (P-fairness) view in addition to the item level"
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "abdollahpouri2020multistakeholder",
+      "title": "Multistakeholder Recommendation: Survey and Research Directions",
+      "authors": "Himan Abdollahpouri, Gediminas Adomavicius, Robin Burke, Ido Guy, Dietmar Jannach, Toshihiro Kamishima, Jan Krasnodebski, Luiz Pizzato",
+      "venue": "User Modeling and User-Adapted Interaction 30(1):127–158",
+      "year": 2020,
+      "url": "https://doi.org/10.1007/s11257-019-09256-1",
+      "topic": "multi-stakeholder fairness and calibration",
+      "paper_path": "docs/literature/papers/abdollahpouri2020multistakeholder.pdf",
+      "summary_path": "docs/literature/abdollahpouri2020multistakeholder.md",
+      "relevance": "Gives formal provider metrics (Table 4: Exposure, Hits, Reach, TargetReach, PAccuracy) usable for §6 Exposure/coverage. It recommends reporting mean, variance and skewness of each stakeholder's utility distribution, which fits §8. It frames fairness as a system objective (S_t) layered on a consumer-accuracy (C_p) anchor, supporting H3 and §7.4 ('whose accuracy was traded'). Its split into in-loss multi-objective methods vs post-hoc re-ranking helps classify the §5 interventions.",
+      "follow_ups": [
+        "Add Exposure(p)/Reach(p) (Table 4) at item and author level as definitions behind coverage@K and exposure entropy in §6",
+        "Report the mean, variance and skewness of per-user NDCG and per-item exposure distributions alongside the bootstrap CIs (§8)",
+        "Separate in-training debiasers (IPS, D2Q, popularity-adjusted training) from post-processing re-rankers in the audit matrix rows",
+        "Note: the local PDF is the arXiv preprint (titled 'Beyond Personalization: Research Directions in Multistakeholder Recommendation'); check the UMUAI version if quoting exact wording"
+      ],
+      "spec_corrections": [
+        "Not cited in docs/spec.md. The open copy (arXiv:1905.01986) has a different title from the UMUAI publication ('Beyond Personalization: Research Directions in Multistakeholder Recommendation'). arXiv:1907.13158 is a different, shorter RMSE@RecSys'19 workshop paper (Abdollahpouri & Burke) and should not be confused with this survey."
+      ]
+    },
+    {
+      "id": "steck2018calibrated",
+      "title": "Calibrated Recommendations",
+      "authors": "Harald Steck",
+      "venue": "RecSys '18 (12th ACM Conference on Recommender Systems)",
+      "year": 2018,
+      "url": "https://doi.org/10.1145/3240323.3240372",
+      "topic": "multi-stakeholder fairness and calibration",
+      "paper_path": "docs/literature/papers/steck2018calibrated.pdf",
+      "summary_path": "docs/literature/steck2018calibrated.md",
+      "relevance": "Supplies the exact calibration-error metric used in §6 User groups. C_KL = KL(p‖q̃) = Σ_g p(g|u) log(p(g|u)/q̃(g|u)), where p is the user's history distribution and is the target. q̃ = (1−α)q + α·p with α = 0.01, i.e. the list is smoothed toward the user's own history, not toward a uniform distribution. q can use rank weights. The metric is averaged over users. Applied to popularity and duration bins, it gives per-user popularity/duration miscalibration (H1, H3). The λ-weighted greedy re-ranker (Eq. 6) is a natural knob-swept method for the §7.2 frontiers (RQ4).",
+      "follow_ups": [
+        "Implement C_KL = KL(p_hist ‖ 0.99·q_list + 0.01·p_hist) over popularity quintiles and duration quintiles; decide whether to use rank weights (nDCG-style) for q or uniform (paper's experiments used uniform)",
+        "Optionally add Steck's re-ranker with λ ∈ {0, 0.2, 0.5, 0.8, 0.9, 0.95, 0.99} (Table 2 grid) as a post-processing baseline on the accuracy × calibration frontier, using the 5×5 popularity×duration grid cells as 'genres'",
+        "Report the Hellinger variant as a robustness check, since it is defined with zeros and less dominated by rare bins",
+        "Flag in §10 that the calibration target is the history from the biased standard logs, so a calibrated list is not an unbiased one",
+        "Read the follow-up Abdollahpouri et al. 2020 'The Connection Between Popularity Bias, Calibration, and Fairness' (arXiv:2008.09273) for the popularity-calibration variant"
+      ],
+      "spec_corrections": [
+        "§6 says calibration error is 'the KL divergence between the popularity/duration profile of a user's history and of their list'. Steck defines it as KL(history ‖ smoothed list) with q̃ = (1−α)q + αp, α = 0.01. The spec should state the direction and the smoothing. Steck applies it to genres, so using popularity/duration bins is an adaptation and should be described as such."
+      ]
+    },
+    {
+      "id": "kowald2021underground",
+      "title": "Support the Underground: Characteristics of Beyond-Mainstream Music Listeners",
+      "authors": "Dominik Kowald, Peter Muellner, Eva Zangerle, Christine Bauer, Markus Schedl, Elisabeth Lex",
+      "venue": "EPJ Data Science 10, 14",
+      "year": 2021,
+      "url": "https://doi.org/10.1140/epjds/s13688-021-00268-9",
+      "topic": "multi-stakeholder fairness and calibration",
+      "paper_path": "docs/literature/papers/kowald2021underground.pdf",
+      "summary_path": "docs/literature/kowald2021underground.md",
+      "relevance": "The spec's mainstreaminess grouping (§6 User groups) and H3 rely on this paper. It does not define a new measure: it uses M-global-R-APC from Bauer & Schedl 2019 (PLOS ONE), Kendall's τ between a user's artist play-count vector and the global artist play-count vector. Low-mainstream users get significantly worse accuracy (e.g. NMF MAE 57.77 vs 54.82), which is the baseline gap H3 expects popularity debiasing to change. The paper also shows strong heterogeneity inside the low-mainstream group, relevant to §7.4 and §10.",
+      "follow_ups": [
+        "Implement mainstreaminess on KuaiRand as Kendall τ between each user's per-item (or per-author) play-count vector and the global play-count vector on the training logs (M-global-R-APC analogue)",
+        "Cite Bauer & Schedl 2019 (PLOS ONE 14(6):e0217389, doi:10.1371/journal.pone.0217389) for the definition and Kowald et al. 2021 for its use in user-group unfairness",
+        "Use more than two mainstreaminess groups (quintiles, or the paper's 15.9th-percentile cutoff plus a matched MS group) to avoid hiding the within-group heterogeneity they report",
+        "Decide whether the global reference vector comes from standard logs (policy-biased) or the random log; report sensitivity"
+      ],
+      "spec_corrections": [
+        "§6 attributes the mainstreaminess measure to 'Kowald et al.'. The measure (M-global-R-APC) is defined in Bauer & Schedl 2019, 'Global and country-specific mainstreaminess measures: Definitions, analysis, and usage for improving personalized music recommendation systems', PLOS ONE 14(6). Kowald et al. 2021 only apply it, so Bauer & Schedl is the better primary citation, with Kowald et al. as the application.",
+        "The spec describes mainstreaminess as 'correlation of a user's history with global popularity'. In the cited work it is a Kendall rank correlation of artist play-count vectors, user vs global, and not a Pearson correlation with item popularity scores. The spec should name the correlation type and the aggregation level."
+      ]
+    },
+    {
+      "id": "chaney2018confounding",
+      "title": "How Algorithmic Confounding in Recommendation Systems Increases Homogeneity and Decreases Utility",
+      "authors": "Allison J.B. Chaney, Brandon M. Stewart, Barbara E. Engelhardt",
+      "venue": "RecSys '18",
+      "year": 2018,
+      "url": "https://arxiv.org/abs/1710.11214",
+      "topic": "feedback loops and simulation",
+      "paper_path": "docs/literature/papers/chaney2018confounding.pdf",
+      "summary_path": "docs/literature/chaney2018confounding.md",
+      "relevance": "This is the primary citation for §9's claim that one offline round cannot show loop effects. In its simulations, homogenisation fades after a single training but grows with repeated retraining, with no matching gain in utility. It supplies loop metrics (Jaccard-based homogenisation, consumption Gini) to add to the §6 panel in §9. It also gives preliminary evidence that IPS-style weighting raises utility and lowers homogenisation, which bears on the §5 IPS row.",
+      "follow_ups": [
+        "In §9, run both a single-retrain and a repeated-retrain regime, so the project shows the single-vs-repeated contrast from Fig. 3 rather than asserting it.",
+        "Add homogenisation to the §9 tracked metrics: the Jaccard index of consumed sets between nearest-neighbour users and between random user pairs, measured against an oracle or random-log reference.",
+        "Track the Gini of consumption per round for naive, PDA, D2Q and IPS, and test whether IPS reproduces the paper's preliminary 'weighting reduces homogenization' finding.",
+        "Read Schmit & Riquelme (2017), the interaction model this paper adapts, if a hand-built user-response model is needed for §9."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "mansoury2020feedback",
+      "title": "Feedback Loop and Bias Amplification in Recommender Systems",
+      "authors": "Masoud Mansoury, Himan Abdollahpouri, Mykola Pechenizkiy, Bamshad Mobasher, Robin Burke",
+      "venue": "CIKM '20",
+      "year": 2020,
+      "url": "https://arxiv.org/abs/2007.13019",
+      "topic": "feedback loops and simulation",
+      "paper_path": "docs/literature/papers/mansoury2020feedback.pdf",
+      "summary_path": "docs/literature/mansoury2020feedback.md",
+      "relevance": "This is the second §9 citation. It gives a concrete offline loop protocol: 80/20 split, retrain, rank-based acceptance e^{α·rank}, an IRT-simulated rating, then append, over T=20 rounds. On ML-1M it shows popularity amplification and falling coverage for UserKNN, BPR and MostPopular. The authors hypothesise, without testing, that popularity-debiasing methods amplify less over rounds. §9 can test this directly for PDA, using the §6 popularity and coverage metrics.",
+      "follow_ups": [
+        "Use rank-based acceptance prob = e^{α·rank} as a fallback user-response model in §9, and sweep α.",
+        "Test the paper's untested hypothesis: does PDA's per-round popularity lift θ_t stay smaller than naive's across 5–10 rounds?",
+        "Report per-group drift in §9, splitting users by KuaiRand user_active_degree as the minority/majority analogue of Mansoury's gender groups, and measure KL of each user's tag distribution from round 1.",
+        "Allow repeat consumption in the KuaiRand loop. The paper flags its no-repeat rule as unrealistic for repeat-heavy domains."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "ie2019recsim",
+      "title": "RecSim: A Configurable Simulation Platform for Recommender Systems",
+      "authors": "Eugene Ie, Chih-wei Hsu, Martin Mladenov, Vihan Jain, Sanmit Narvekar, Jing Wang, Rui Wu, Craig Boutilier",
+      "venue": "arXiv preprint (Google Research)",
+      "year": 2019,
+      "url": "https://arxiv.org/abs/1909.04847",
+      "topic": "feedback loops and simulation",
+      "paper_path": "docs/literature/papers/ie2019recsim.pdf",
+      "summary_path": "docs/literature/ie2019recsim.md",
+      "relevance": "RecSim is a stylised, configurable alternative simulator for §9. Its document length and time-budget abstractions fit the duration (D2Q) arm. Its users are simulated independently, so population-level popularity feedback needs an external pooled retraining loop. Its train/evaluate-under-different-choice-models protocol supports a §10-style robustness check on simulator misspecification.",
+      "follow_ups": [
+        "If KuaiSim lacks duration, consider a RecSim environment whose choice model (MNL) and length/budget fields are fitted on the KuaiRand random log, as §9 permits.",
+        "Run one §9 robustness check: train the loop under one user-response model and evaluate under another, as in RecSim §4.1.",
+        "Do not treat RecSim's bundled environments as benchmarks; the authors explicitly disclaim this."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "rohde2018recogym",
+      "title": "RecoGym: A Reinforcement Learning Environment for the Problem of Product Recommendation in Online Advertising",
+      "authors": "David Rohde, Stephen Bonner, Travis Dunlop, Flavian Vasile, Alexandros Karatzoglou",
+      "venue": "arXiv preprint (RecSys '18 template; [INFERENCE] RecSys 2018 REVEAL workshop)",
+      "year": 2018,
+      "url": "https://arxiv.org/abs/1808.00720",
+      "topic": "feedback loops and simulation",
+      "paper_path": "docs/literature/papers/rohde2018recogym.pdf",
+      "summary_path": "docs/literature/rohde2018recogym.md",
+      "relevance": "RecoGym is mostly a negative reference for §9. It is ad- and CTR-centric, has no item duration, and has no user-state transitions, so it cannot host the duration arm. In KuaiSim's comparison it was the least faithful simulator rebuilt on KuaiRand. Its motivation (exploding and capped IPS weights) frames the IPS trade-off for the §5 IPS row and the §10 propensity-misspecification threat. Its organic/bandit split mirrors KuaiRand's standard/random logs (§2).",
+      "follow_ups": [
+        "For the §5 IPS row, report the propensity clipping threshold and the effective sample size or weight variance, reflecting RecoGym's point about capping bias.",
+        "Exclude RecoGym as a §9 simulator candidate and document why (no duration, no user transitions)."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "zhao2023kuaisim",
+      "title": "KuaiSim: A Comprehensive Simulator for Recommender Systems",
+      "authors": "Kesen Zhao, Shuchang Liu, Qingpeng Cai, Xiangyu Zhao, Ziru Liu, Dong Zheng, Peng Jiang, Kun Gai",
+      "venue": "NeurIPS 2023 (Datasets & Benchmarks track per assignment; PDF says only NeurIPS 2023)",
+      "year": 2023,
+      "url": "https://arxiv.org/abs/2309.12645",
+      "topic": "feedback loops and simulation",
+      "paper_path": "docs/literature/papers/zhao2023kuaisim.pdf",
+      "summary_path": "docs/literature/zhao2023kuaisim.md",
+      "relevance": "KuaiSim is confirmed to be built on KuaiRand-Pure (50-core filtered: 27,077 users, 7,551 items, 1,436,609 interactions). It simulates multi-behaviour immediate feedback (click, long_view as a binary flag, like, comment, follow, forward, hate), a leave signal and return time. It has no continuous watch time and no duration-conditioned response. The paper does not say whether the UIRM is trained on the random or the standard log. The interaction count exceeds the 1,186,059 random interventions, which suggests the standard log [INFERENCE]. If so, the simulator embeds the exposure and popularity bias under audit, which matters for §9.",
+      "follow_ups": [
+        "Inspect the KuaiSim repo's data preprocessing to see which KuaiRand-Pure log file(s) train the UIRM, standard or random.",
+        "If the UIRM uses the standard log, either retrain it on the random log only, or use §9's alternative random-log response model.",
+        "Add a duration/play-time output head, or a watch-ratio model, so the D2Q and watch-ratio labels can be evaluated across rounds.",
+        "Compute §6 popularity, duration-bucket and exposure metrics on each round's recommended lists outside KuaiSim, since it reports only coverage and ILD.",
+        "Account for the 50-core filtering (7,583 → 7,551 items) when comparing simulated tail metrics with the random-log test set."
+      ],
+      "spec_corrections": [
+        "§9 says 'KuaiSim, which is built on KuaiRand'. This is correct (KuaiRand-Pure), but the paper does not state that KuaiSim's user-response model is fitted on the random-exposure log; it likely uses the standard log [INFERENCE]. So KuaiSim should not be assumed to be an unbiased simulator.",
+        "KuaiSim simulates only a binary long_view, not continuous watch time or watch ratio. §9's plan to track D2Q in KuaiSim needs an extension."
+      ]
+    },
+    {
+      "id": "gao2022kuairand",
+      "title": "KuaiRand: An Unbiased Sequential Recommendation Dataset with Randomly Exposed Videos",
+      "authors": "Chongming Gao, Shijun Li, Yuan Zhang, Jiawei Chen, Biao Li, Wenqiang Lei, Peng Jiang, Xiangnan He",
+      "venue": "CIKM '22",
+      "year": 2022,
+      "url": "https://arxiv.org/abs/2208.08696",
+      "topic": "dataset and backbone models",
+      "paper_path": "docs/literature/papers/gao2022kuairand.pdf",
+      "summary_path": "docs/literature/gao2022kuairand.md",
+      "relevance": "This is the core dataset behind §2, §4 and §6. The random log is 1,186,059 interactions from 27,285 users on a filtered pool of 7,583 items, collected 2022-04-22 to 05-08. For each user feed request, the system decided with a fixed but undisclosed probability whether to replace one slot with an item drawn uniformly from the pool. The paper confirms the spec's file names, the `is_rand` flag and that the random window overlaps the second standard window, which supports the §2 temporal guard. It also shows that `is_click` and `long_view` are defined with duration thresholds, which matters for §4 and H1.",
+      "follow_ups": [
+        "Treat `is_click` as UI-dependent: in the single-column UI it is valid_play (≥7 s or the full video). Stratify by `tab`, or note in §4 that the Click label is partly duration-coupled.",
+        "Do not use `video_features_statistic_pure.csv` counts as training-time popularity. They are monthly averages spanning both windows, so they leak the test period. Compute popularity from `log_standard_4_08_to_4_21` instead.",
+        "Run the §2 uniformity check. Expect about 156 random exposures per item on average and compare against the Pure standard log, which covers 7,551 items with 1,436,609 interactions.",
+        "Add to §10: the ≥10-random-exposure user filter, the undisclosed insertion probability, and that only one slot of a policy-chosen list was replaced, so its position and context are policy-dependent.",
+        "Check whether `duration_ms` in the logs matches `video_duration` in the basic features, and which one to use for duration quantiles."
+      ],
+      "spec_corrections": [
+        "§4 'Click = is_click, bias: clickbait, exposure': according to the README, `is_click` is a real click only in the two-column UI. In the single-column UI it means valid_play (play_time_ms ≥ duration_ms if duration ≤ 7 s, else > 7 s), so it is partly a duration-thresholded watch label.",
+        "§2 should name the files exactly: log_random_4_22_to_5_08_pure.csv, log_standard_4_08_to_4_21_pure.csv, log_standard_4_22_to_5_08_pure.csv, user_features_pure.csv, video_features_basic_pure.csv, video_features_statistic_pure.csv. The `log_standard_*`/`log_random_*` globs are correct.",
+        "§2's claim that the random log overlaps the second standard window is CONFIRMED: both cover 2022-04-22 to 05-08, and the earlier standard window is 04-08 to 04-21.",
+        "§6 user groups: `user_active_degree` has 4 values {high_active, full_active, middle_active, UNKNOWN}. UNKNOWN needs handling.",
+        "The paper does not describe the random log as fully unbiased in the sense §10 discusses. The §10 caveats are the project's own and are consistent with the paper, which states insertion into the feed, a filtered 7,583-item pool and filtering to users with ≥10 random exposures.",
+        "Minor inconsistency in the source itself: Pure is said to keep '7,582' (appendix) vs '7583' (README) pool videos; the ID range is 0–7,582."
+      ]
+    },
+    {
+      "id": "guo2017deepfm",
+      "title": "DeepFM: A Factorization-Machine based Neural Network for CTR Prediction",
+      "authors": "Huifeng Guo, Ruiming Tang, Yunming Ye, Zhenguo Li, Xiuqiang He",
+      "venue": "IJCAI 2017",
+      "year": 2017,
+      "url": "https://arxiv.org/abs/1703.04247",
+      "topic": "dataset and backbone models",
+      "paper_path": "docs/literature/papers/guo2017deepfm.pdf",
+      "summary_path": "docs/literature/guo2017deepfm.md",
+      "relevance": "This is the feature-based robustness backbone in §5. Its FM and DNN parts share one field embedding, so KuaiRand user and video features plug in directly. It is a pointwise BCE model with no exposure correction, which suits IPS/DR reweighting. If `video_duration` is used as a feature, the naive model can learn duration coupling directly, which affects H1.",
+      "follow_ups": [
+        "Use a fixed DeepFM grid taken from the paper's study: constant width 200–400, dropout keep-probability 0.6–0.9, ReLU, Adam. Keep the embedding size k equal to MF's f, per §5.",
+        "Run an ablation with and without `video_duration` as an input field to see whether the duration-debiasing effect depends on the backbone.",
+        "Decide how continuous fields (duration, counts) are bucketed into one-hot fields; the paper allows either raw values or discretised one-hot."
+      ],
+      "spec_corrections": []
+    },
+    {
+      "id": "koren2009mf",
+      "title": "Matrix Factorization Techniques for Recommender Systems",
+      "authors": "Yehuda Koren, Robert Bell, Chris Volinsky",
+      "venue": "IEEE Computer 42(8):30–37",
+      "year": 2009,
+      "url": "https://doi.org/10.1109/MC.2009.263",
+      "topic": "dataset and backbone models",
+      "paper_path": null,
+      "summary_path": "docs/literature/koren2009mf.md",
+      "relevance": "This is the primary MF backbone in §5, the biased MF form μ+b_u+b_i+q_iᵀp_u. Its item bias absorbs popularity as a signal, which interacts with PDA/MACR in the §5 Popularity row. It is fit only on observed entries, which is the MAR assumption that the KuaiRand random-log evaluation tests. No PDF: the paper is closed access (IEEE paywall; Semantic Scholar openAccessPdf CLOSED) and no author-hosted copy was found. The summary is based on the abstract and section outline only, and the model details are marked [INFERENCE].",
+      "follow_ups": [
+        "Fix whether b_u and b_i are kept for all methods, and report it, since PDA/MACR model popularity on top of or instead of b_i.",
+        "Obtain the full text through university IEEE access to verify the bias and implicit-feedback formulation before citing details.",
+        "Use one embedding dimension f shared with DeepFM, per §5."
+      ],
+      "spec_corrections": []
+    }
+  ]
+}
