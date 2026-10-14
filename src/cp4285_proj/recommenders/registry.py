@@ -22,7 +22,7 @@ def register_recommender(name: str) -> Callable[[type], type]:
 
 
 def _ensure_builtins() -> None:
-    from cp4285_proj.recommenders import mf  # noqa: F401  (registers "mf")
+    from cp4285_proj.recommenders import naive_mf  # noqa: F401  (registers "mf")
 
 
 def get_recommender(name: str) -> type:

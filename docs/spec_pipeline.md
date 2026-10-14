@@ -73,7 +73,7 @@ src/cp4285_proj/
   recommenders/
     base.py            # Recommender protocol, TorchRecommender, Backbone
     registry.py        # @register_recommender, lookup by name
-    mf.py              # MFBackbone, NaiveMF
+    naive_mf.py        # MFBackbone, NaiveMF
   training/
     loop.py            # GPU-resident epoch loop, early stopping, seeding
     sweep.py           # budgeted search → final seed reruns
@@ -322,7 +322,7 @@ No pipeline code reads embeddings or other model internals.
 - Construction is not part of the pipeline surface. A `TorchRecommender` is built as `cls(model_cfg, train_cfg)` and declares two class attributes: `model_config_cls` (the frozen dataclass for its `[model]` section) and `supported_labels` (checked at config load, which is how MF rejects `raw_watch_time`).
 - `Backbone` declares `n_users` and `n_items` (used by `save` and the default `score_all`).
 
-### 5.3 Naive MF (`recommenders/mf.py`)
+### 5.3 Naive MF (`recommenders/naive_mf.py`)
 
 - **Backbone:** `logit(u,i) = ⟨p_u, q_i⟩ + b_u + b_i + b`.
   - Embeddings are initialised with N(0, 0.01²) and biases with zero.
