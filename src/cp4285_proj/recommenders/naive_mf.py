@@ -1,4 +1,8 @@
-"""Naive MF (spec §5.3): logit(u,i) = <p_u, q_i> + b_u + b_i + b, pointwise BCE on logged exposures."""
+"""Naive MF (spec §5.3): logit(u,i) = <p_u, q_i> + b_u + b_i + b, pointwise BCE on logged exposures.
+
+On `raw_watch_time` it is the D2Q paper's value regression (VR, spec §13.2): MSE on watch time divided by its
+train mean, so the output is in units of the mean watch time.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from cp4285_proj.recommenders.base import Backbone, FitContext, FitResult, TorchRecommender, TrainData
+from cp4285_proj.recommenders.base import Backbone, Batch, FitContext, FitResult, TorchRecommender, TrainData
 from cp4285_proj.recommenders.registry import register_recommender
 
 
@@ -36,7 +40,8 @@ class MFBackbone(Backbone):
 @register_recommender("mf")
 class NaiveMF(TorchRecommender):
     model_config_cls = MFModelConfig
-    supported_labels = ("click", "long_view", "satisfaction", "watch_ratio")
+    supported_labels = ("click", "long_view", "satisfaction", "watch_ratio", "raw_watch_time")
+    _target_scale: float | None = None  # train mean of a regression target; None for BCE targets
 
     def build_backbone(self, n_users: int, n_items: int) -> Backbone:
         return MFBackbone(n_users, n_items, self.model_cfg.embedding_dim)
@@ -44,7 +49,14 @@ class NaiveMF(TorchRecommender):
     def fit(self, train: TrainData, ctx: FitContext) -> FitResult:
         self._cold_users = torch.bincount(train.user, minlength=train.n_users) == 0
         self._cold_items = torch.bincount(train.item, minlength=train.n_items) == 0
+        if not ctx.label.unit_interval:
+            self._target_scale = float(train.target.mean())
         return super().fit(train, ctx)
+
+    def batch_loss(self, batch: Batch) -> torch.Tensor:
+        if self._target_scale is None:
+            return super().batch_loss(batch)
+        return nn.functional.mse_loss(self.backbone(batch.user, batch.item), batch.target / self._target_scale)
 
     def configure_optimizer(self) -> torch.optim.Optimizer:
         """Default Adam(lr, weight_decay), plus: rows with no train data keep their starting values.

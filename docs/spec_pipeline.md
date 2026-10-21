@@ -229,7 +229,7 @@ hist_dur_dist: list[float32]  # length 5; null if no_history
 |---|---|
 | model hyperparameters, **including embedding size** | training label (experiment config, applied outside the recommender) |
 | optimizer, batch size, max epochs, patience | tuning budget (number of trials) |
-| search space (`[search]`) | selection rule: calibration GAUC under the training label's binary relevance |
+| search space (`[search]`) | selection rule: calibration GAUC under the training label's binary relevance; for a label without one (`raw_watch_time`), calibration NDCG@10 under that label (§13.2) |
 | inference (`score`, `recommend`) | seeds for the final runs, `K_max`, masking policy |
 
 ### 5.2 Interfaces
@@ -321,7 +321,7 @@ No pipeline code reads embeddings or other model internals.
 **Additions made during implementation** (they extend the contract above; nothing above was removed or changed):
 - `Batch` is a frozen dataclass `(idx, user, item, target, train)`; `batch.extra(name)` gathers `train.extras[name][idx]` on demand, so unused extras are never sliced.
 - `CandidateSet` is `(row_id, user_idx, item_idx, labels)` as numpy arrays; `CSRMask` (in `data/schema.py`) is `(indptr, indices)` over all users; `RunLogger` is a protocol with `log_metrics(metrics, step)`.
-- Construction is not part of the pipeline surface. A `TorchRecommender` is built as `cls(model_cfg, train_cfg)` and declares two class attributes: `model_config_cls` (the frozen dataclass for its `[model]` section) and `supported_labels` (checked at config load, which is how MF rejects `raw_watch_time`).
+- Construction is not part of the pipeline surface. A `TorchRecommender` is built as `cls(model_cfg, train_cfg)` and declares two class attributes: `model_config_cls` (the frozen dataclass for its `[model]` section) and `supported_labels` (checked at config load, which is how D2Q rejects every label but `raw_watch_time`).
 - `Backbone` declares `n_users` and `n_items` (used by `save` and the default `score_all`).
 
 ### 5.3 Naive MF (`recommenders/naive_mf.py`)
@@ -331,7 +331,8 @@ No pipeline code reads embeddings or other model internals.
   - `score_all` is `P[u] @ Qᵀ + b_u + b_I + b`.
 - **Loss:** pointwise BCE on logged exposures. There is no negative sampling, because the logs already contain the negatives.
   - For `watch_ratio`, the capped value is the soft target.
-  - Supported training labels: `click`, `long_view`, `satisfaction`, `watch_ratio`. `raw_watch_time` is rejected at config load with a clear error.
+  - For `raw_watch_time` (a `LabelSpec` with `unit_interval = False`), the loss is MSE on watch time divided by its train mean instead (§13.2).
+  - Supported training labels: `click`, `long_view`, `satisfaction`, `watch_ratio`, `raw_watch_time`.
 - **Users and items with no train rows** keep their starting embeddings and are still scored. Torch's `Adam(weight_decay=…)` decays every row at every step, so `NaiveMF.configure_optimizer` keeps the default Adam and registers a step post-hook that restores those rows (`P`, `b_u` for users; `Q`, `b_i` for items) to their initial values.
 - **`configs/recommenders/mf.toml` defaults:**
 
@@ -357,7 +358,7 @@ weight_decay = [0.0, 1e-6, 1e-5]
 - **Seeding:** `random`, `numpy` and `torch` (including CUDA). `torch.use_deterministic_algorithms(True)` with `CUBLAS_WORKSPACE_CONFIG=:4096:8` when `pipeline.deterministic = true`, which is the default.
 - **Data on the GPU:** `TrainData` is built once on the device. Each epoch draws `torch.randperm(N, device=…)` and slices batches by index.
 - **Per batch:** `batch_loss` (by default forward → `sample_weight` → `loss`) → step.
-- **After each epoch:** `selection = ctx.selection(model)`. This is calibration GAUC under the training label's binary relevance, computed from `score` over the calibration candidate rows. The best `state_dict` is kept in memory. Training stops when `patience` epochs pass without improvement or `max_epochs` is reached.
+- **After each epoch:** `selection = ctx.selection(model)`. This is calibration GAUC under the training label's binary relevance (calibration NDCG@10 for a label without one, §13.2), computed from `score` over the calibration candidate rows. The best `state_dict` is kept in memory. Training stops when `patience` epochs pass without improvement or `max_epochs` is reached.
 - **Logged to MLflow per epoch:** `train_loss`, `cal_selection`, `epoch_time_s`.
 
 ### 5.5 Sweep (`kr-sweep configs/experiments/mf_click.toml`)
@@ -571,7 +572,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 4. The manifest contains every count and check in §4.2 step 8.
 5. Popularity, bins, head, user groups and history distributions depend only on train rows: changing any calibration or test label leaves `items.parquet`, except `is_clickbait`, and `users.parquet` unchanged. `is_clickbait` depends on calibration rows only: changing test labels leaves it unchanged.
 6. `kr-train configs/experiments/mf_click.toml` trains Naive MF on the GPU and writes everything in §6 for calibration. The calibration GAUC at the best epoch is above 0.5. With `deterministic = true`, two runs with the same seed give the same `best_selection_score`.
-7. `kr-train` with `train_label = "raw_watch_time"` fails at config load with an error naming the unsupported label.
+7. `kr-train` with a training label that the recommender does not support (e.g. `click` for `d2q`) fails at config load with an error naming the unsupported label.
 8. `kr-sweep` runs at most `tuning_budget` tuning runs and then 5 final runs, all visible in MLflow with the tags in §5.5.
 9. `kr-evaluate <final_run> --split test` writes the test predictions and the panel output. Evaluating a non-final run on test raises an error. A second test evaluation warns and records `test_eval_count = 2`.
 10. Adding a `[[metric]]` entry for a newly registered function, or deleting an entry, then rerunning `kr-evaluate`, gives results under a new panel hash. No retraining and no rescoring happen, because the existing `pred/` files are reused.
@@ -603,10 +604,10 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 | `full` split | `data/preprocess.py` split definition; `experiments/*.toml` `split = "full"` |
 | PDA / MACR | `TorchRecommender.adjust_scores` + `batch_loss` (PDA: §13.1) |
 | IPS / SNIPS / DR | `sample_weight` / `loss`; diagnostics (max weight, ESS) logged from `training/loop.py` |
-| D2Q / duration-quantile label | new `LabelSpec` in `data/labels.py` (+ `extras` in `TrainData`) |
+| D2Q / duration-quantile label | `batch_loss` with a target built in `fit` + `adjust_scores` (§13.2) |
 | AutoDebias | a `Recommender` whose `fit` also consumes calibration rows; flagged `uses_calibration_for_training` in MLflow |
 | DeepFM | new `Backbone` reading user/video feature tensors |
-| Raw watch time training | regression `loss` + selection on NDCG (needs a pipeline decision because the selection rule is GAUC) |
+| Raw watch time training | done: Naive MF regression + NDCG@10 selection (§13.2) |
 | Paired tests + Holm | `evaluation/bootstrap.py` over `per_user.parquet` of two sweeps |
 | New metrics | one `@register_metric` function + one `panel.toml` entry |
 
@@ -624,3 +625,13 @@ Common protocol, so that only the correction varies:
   - Local popularity: the train window is cut into `n_stages = 10` equal-time stages (the paper's 10; on `guarded` the last stage holds 27,619 rows). `m_i^t = (c_i^t + 1) / (N_t + n_items) · n_items`, where `c_i^t` counts the item's train **exposures** in stage `t`. Exposures, not clicks, because the confounding path is popularity → exposure and the logs record exposures directly. Add-one smoothing keeps items unseen in a stage finite, and the `n_items` factor centres a uniformly exposed item at `log m = 0`.
 - **Inference:** `f(u, i) + γ̃ · log m̃_i`, with `m̃_i` the last-stage popularity (the paper's method (a); its linear forecast (b) is not implemented). `γ̃ = 0` is PD and `γ̃ > 0` is PDA. `m̃` is a buffer of the backbone and is saved in `best.pt`.
 - **Knob:** `gamma ∈ {0.02, 0.05, 0.1, 0.15, 0.2, 0.25}` (the paper's search range), each once with `gamma_infer = 0` (PD) and once with `gamma_infer = gamma` (PDA, the paper's practice). `gamma = gamma_infer = 0` is exactly Naive MF.
+
+### 13.2 Raw watch time: VR baseline and D2Q (`recommenders/naive_mf.py`, `recommenders/d2q.py`)
+
+- **Selection for labels without a binary relevance.** `make_selection` uses calibration NDCG@`SELECTION_NDCG_K` (10) under the training label, with the panel's gain (`raw_watch_time` min-max scaled within the user) and the panel's exclusion of users whose gains are all equal. Only `raw_watch_time` is affected; every other label keeps GAUC.
+- **VR baseline** (`mf` on `raw_watch_time`, `configs/experiments/mf_raw_watch_time.toml`): the D2Q paper's value regression. MSE between the MF output and watch time divided by its train mean (23.6 s on `guarded`). The scale only keeps targets near 1 for Adam and does not change the ranking.
+- **D2Q** (`configs/experiments/d2q_raw_watch_time.toml`, supports only `raw_watch_time`):
+  - Train rows are cut into `n_groups` equal-frequency duration groups. Cut `j` is the sorted row duration at rank ⌈(j/M)(N−1)⌉, so it is an actual duration and equal durations always share a group. Fewer groups are formed when durations tie at a cut, and the count is logged as `d2q_groups`.
+  - The training target of a row is its watch-time ECDF value within its group, Φ̂_k(w) = #{w' ≤ w} / n_k. The model is one MF, h = σ(f(u, i)), trained with soft-target BCE (the pipeline's convention for [0, 1] targets, e.g. `watch_ratio`). BCE has the same minimiser as the paper's MSE, E[Φ̂_k(w) | u, i]. The item id already identifies the duration group, so the paper's duration input feature is not needed.
+  - Inference with `rank_by = "watch_time"` (the published D2Q) ranks by Φ̂_k⁻¹(h). The inverse CDF of each group is stored at 1,001 levels and interpolated linearly. With `rank_by = "quantile"`, it ranks by h, which is the methodology's duration-quantile label. Item groups and inverse CDFs are backbone buffers, saved in `best.pt`. Items outside the train duration range take the first or last group.
+- **Knob:** `n_groups ∈ {1, 10, 20, 30, 60, 100}`: the paper's grid {1, 10, 20, 30, 50, 100}, with 50 replaced by 60, the KuaiRand-Pure setting used by D2Co and CWM. Each value is run once per `rank_by`. With `n_groups = 1`, both rankings are monotone in h and differ only through ties of the inverse CDF.

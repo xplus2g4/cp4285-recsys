@@ -16,7 +16,7 @@ import polars as pl
 import torch
 
 from cp4285_proj.data.labels import LABELS, LabelSpec
-from cp4285_proj.metrics.accuracy import gauc_value
+from cp4285_proj.metrics.accuracy import gauc_value, per_user_ndcg
 from cp4285_proj.recommenders.base import (
     Batch,
     CandidateSet,
@@ -30,6 +30,7 @@ from cp4285_proj.recommenders.base import (
 )
 
 EXTRA_COLUMNS = ("time_ms", "tab", "is_hate")
+SELECTION_NDCG_K = 10  # selection for training labels without a binary relevance (raw_watch_time)
 
 
 def configure_determinism(deterministic: bool) -> None:
@@ -77,14 +78,26 @@ def candidate_set(part: pl.DataFrame) -> CandidateSet:
 
 
 def make_selection(cal: CandidateSet, label: LabelSpec) -> SelectionFn:
-    """Pipeline-owned selection: calibration GAUC under the training label's binary relevance."""
+    """Pipeline-owned selection on calibration: GAUC under the training label's binary relevance, or, for a
+    label without one, mean NDCG@`SELECTION_NDCG_K` under the label with the panel's gain (users with
+    all-equal gains excluded, as in the panel)."""
     users, pos = np.unique(cal.user_idx, return_inverse=True)
-    rel = label.binary(cal.labels[label.name])
+    values = cal.labels[label.name]
+    if label.has_relevance:
+        rel = label.binary(values)
 
-    def selection(model: Recommender) -> float:
-        return gauc_value(pos, model.score(cal.user_idx, cal.item_idx), rel, len(users))
+        def selection(model: Recommender) -> float:
+            return gauc_value(pos, model.score(cal.user_idx, cal.item_idx), rel, len(users))
 
-    return selection
+        return selection
+
+    minmax = label.ndcg_gain == "user_minmax"
+
+    def selection_ndcg(model: Recommender) -> float:
+        ndcg = per_user_ndcg(pos, model.score(cal.user_idx, cal.item_idx), values, len(users), SELECTION_NDCG_K, minmax)
+        return float(np.nanmean(ndcg))
+
+    return selection_ndcg
 
 
 def run(model: TorchRecommender, train: TrainData, ctx: FitContext) -> FitResult:

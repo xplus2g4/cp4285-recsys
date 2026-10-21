@@ -1,0 +1,18 @@
+# D2Q (Zhan et al., KDD '22) on the MF backbone (spec §13.2). Trains on raw_watch_time (selection: NDCG@10).
+# Frontier: sweep `n_groups`, once with rank_by = "watch_time" (published D2Q) and once with "quantile".
+[model]
+embedding_dim = 64
+n_groups = 30              # M equal-frequency duration groups over train rows
+rank_by = "watch_time"     # "watch_time": Φ̂_k⁻¹(h) (published D2Q); "quantile": h (duration-quantile label)
+
+[train]
+optimizer = "adam"
+lr = 3e-3
+weight_decay = 1e-6
+batch_size = 8192
+max_epochs = 50
+patience = 5
+
+[search]           # the MF grid: every method tunes the shared backbone the same way
+lr = [1e-3, 3e-3, 1e-2]
+weight_decay = [0.0, 1e-6, 1e-5]

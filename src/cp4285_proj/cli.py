@@ -95,10 +95,10 @@ def sweep_main(argv: list[str] | None = None) -> None:
     s = run_sweep(cfg, _device(cfg.pipeline))
     print(f"\nsweep_id {s['sweep_id']}")
     for t in s["tuning"]:
-        print(f"  tuning {t['point']}  cal GAUC {t['best_selection_score']:.5f}  (best epoch {t['best_epoch']}, {t['epochs_run']} epochs)  {t['run_id']}")
-    print(f"best point {s['best_point']}  cal GAUC {s['best_tuning']['best_selection_score']:.5f}")
+        print(f"  tuning {t['point']}  cal selection {t['best_selection_score']:.5f}  (best epoch {t['best_epoch']}, {t['epochs_run']} epochs)  {t['run_id']}")
+    print(f"best point {s['best_point']}  cal selection {s['best_tuning']['best_selection_score']:.5f}")
     for f in s["final"]:
-        print(f"  final seed {f['seed']}  cal GAUC {f['best_selection_score']:.5f}  run_id {f['run_id']}")
+        print(f"  final seed {f['seed']}  cal selection {f['best_selection_score']:.5f}  run_id {f['run_id']}")
 
 
 def _fmt(v: float) -> str:
