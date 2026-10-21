@@ -602,7 +602,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 | Addition | Where it plugs in |
 |---|---|
 | `full` split | `data/preprocess.py` split definition; `experiments/*.toml` `split = "full"` |
-| PDA / MACR | `TorchRecommender.adjust_scores` + `batch_loss` (PDA: §13.1) |
+| PDA / MACR | `TorchRecommender.adjust_scores` + `batch_loss` (PDA: §13.1, MACR: §13.5) |
 | IPS / SNIPS / DR | `sample_weight` / `loss`; diagnostics (max weight, ESS) logged once per run from `fit` (IPS: §13.3) |
 | D2Q / duration-quantile label | `batch_loss` with a target built in `fit` + `adjust_scores` (§13.2) |
 | AutoDebias | a `Recommender` whose `fit` also consumes calibration rows; flagged `uses_calibration_for_training` in MLflow |
@@ -649,3 +649,11 @@ Common protocol, so that only the correction varies:
 - Same propensity, weights, clipping and diagnostics as IPS (§13.3). The loss is `Σ w·BCE / Σ w` over the batch, the self-normalised estimator.
 - The propensities do not depend on the model, so over the full train set the SNIPS normaliser `Σ w` is a constant. SNIPS and IPS therefore share a minimiser, and SNIPS's control variate (Swaminathan & Joachims) acts only through the per-batch normaliser. Each batch's loss becomes a convex combination of its per-row losses, so batches that draw a few very large weights do not take larger steps. The difference should grow with `clip` and vanish as the weights become uniform.
 - **Knob:** the IPS grid, `clip ∈ {10, 30, 100, 300, 1000, inf}`.
+
+### 13.5 MACR (`recommenders/macr.py`, `configs/recommenders/macr.toml`)
+
+- **Branches** (Eq. 7): `ŷ_k` is the MF backbone logit, unchanged, because MACR is model-agnostic and takes the existing recommender as its matching branch. The item module is `ŷ_i = w_i · q_i + b'_i` and the user module is `ŷ_u = w_u · p_u + b'_u`: linear layers on the backbone's embeddings (the paper: "can be implemented as multi-layer perceptrons").
+  - Departure: the paper's MF has no bias terms. Here `ŷ_k` keeps the backbone's per-item bias `b_i`, so the part of the item's direct effect that `b_i` absorbs stays in the matching branch and is not removed at inference. Dropping `b_i` would change the backbone that §13 holds fixed.
+- **Training** (Eq. 8): `BCE(ŷ_k σ(ŷ_i) σ(ŷ_u)) + α BCE(ŷ_i) + β BCE(ŷ_u)` on the logged exposures, with the paper's defaults `α = β = 1e-3`.
+- **Inference** (Eq. 9): rank by `(ŷ_k − c) σ(ŷ_i) σ(ŷ_u)`. `c = 0` ranks by the total effect, i.e. MACR's training without counterfactual inference.
+- **Knob:** `c ∈ {0, 10, 20, 30, 40, 60, 100}`. This covers the paper's tuned range {20, …, 40}. With the paper's α and β, the learned `σ(ŷ_i)` spans only about 0.98–1.00 on `guarded`, so `c` has to be large before `c · Δσ(ŷ_i)` competes with the spread of `ŷ_k` (about −1.6 to 1.0 between the 1st and 99th percentiles). A calibration-only check on one tuning model gave an unmasked top-10 ARP, over 3,000 calibration users, of 1,968 → 869 as `c` goes from 0 to 100, while calibration GAUC fell from 0.5460 to 0.5434.

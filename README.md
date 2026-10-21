@@ -14,6 +14,7 @@ random-exposure log.
 | `d2q` | D2Q (Zhan et al. KDD '22), spec §13.2 | `d2q_raw_watch_time.toml` | `--model.n_groups M` with `--model.rank_by watch_time` (D2Q) or `quantile` |
 | `ips` | IPS, popularity propensity (Schnabel et al. ICML '16), spec §13.3 | `ips_click.toml` | `--model.clip c` |
 | `snips` | SNIPS, IPS weights with batch self-normalisation (Swaminathan & Joachims NeurIPS '15), spec §13.4 | `snips_click.toml` | `--model.clip c` |
+| `macr` | MACR (Wei et al. KDD '21), spec §13.5 | `macr_click.toml` | `--model.c c` |
 
 Training labels without a binary relevance (`raw_watch_time`) are selected by calibration NDCG@10 instead of GAUC.
 

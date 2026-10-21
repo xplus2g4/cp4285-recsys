@@ -1,0 +1,3 @@
+recommender = "macr"
+train_label = "click"
+split = "guarded"
