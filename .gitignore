@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Datasets
-data/
+/data/
 
 # Pipeline outputs
 mlflow.db
