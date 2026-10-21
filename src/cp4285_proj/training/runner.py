@@ -43,7 +43,7 @@ def prepare(cfg: RunConfig, device: torch.device, processed_dir: str = "data/pro
         manifest_hash=manifest_hash(directory),
         label=label.name,
         frames=frames,
-        train=build_train_data(frames["train"], frames["items"], n_users, label, device),
+        train=build_train_data(frames, label, device),
         calibration=candidate_set(frames["calibration"]),
         seen=load_seen_mask(directory, n_users),
     )
