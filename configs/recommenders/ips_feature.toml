@@ -1,0 +1,20 @@
+# IPS with a feature-based (FM) propensity on the MF backbone (spec §13.6).
+# Frontier: sweep `clip`.
+[model]
+embedding_dim = 64
+clip = inf          # largest weight relative to the smallest (before mean normalisation); inf = no clipping
+propensity_dim = 8      # FM factor size of the propensity model
+propensity_epochs = 15
+propensity_lr = 1e-2
+
+[train]
+optimizer = "adam"
+lr = 3e-3
+weight_decay = 1e-6
+batch_size = 8192
+max_epochs = 50
+patience = 5
+
+[search]           # the MF grid: every method tunes the shared backbone the same way
+lr = [1e-3, 3e-3, 1e-2]
+weight_decay = [0.0, 1e-6, 1e-5]

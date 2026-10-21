@@ -48,22 +48,28 @@ def seed_everything(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def build_train_data(train: pl.DataFrame, items: pl.DataFrame, n_users: int, label: LabelSpec, device: torch.device) -> TrainData:
-    """Train split → device tensors, built once."""
+def build_train_data(frames: dict[str, pl.DataFrame], label: LabelSpec, device: torch.device) -> TrainData:
+    """Train split (+ item metadata and side features) → device tensors, built once."""
+    train = frames["train"]
 
     def t(col: str, dtype: torch.dtype) -> torch.Tensor:
         return torch.tensor(train[col].to_numpy(), device=device).to(dtype)
 
+    def codes(df: pl.DataFrame, key: str) -> torch.Tensor:
+        return torch.tensor(df.sort(key).drop(key).to_numpy(), device=device).to(torch.int64)
+
     extras = {c: t(c, torch.float32 if c in LABELS and LABELS[c].kind == "graded" else torch.int64) for c in LABELS if c != label.name}
     extras.update({c: t(c, torch.int64) for c in EXTRA_COLUMNS})
-    it = items.sort("item_idx")
+    it = frames["items"].sort("item_idx")
     return TrainData(
         user=t("user_idx", torch.int64),
         item=t("item_idx", torch.int64),
         target=t(label.name, torch.float32),
         extras=extras,
         items=ItemTensors(**{c: torch.tensor(it[c].to_numpy(), device=device).to(torch.int64) for c in ("pop_exposure", "pop_bin", "dur_bin", "duration_ms")}),
-        n_users=n_users,
+        user_features=codes(frames["user_features"], "user_idx"),
+        item_features=codes(frames["item_features"], "item_idx"),
+        n_users=frames["users"].height,
         n_items=it.height,
     )
 
@@ -138,7 +144,7 @@ def run(model: TorchRecommender, train: TrainData, ctx: FitContext) -> FitResult
 
 
 def load_split_frames(directory: Path) -> dict[str, pl.DataFrame]:
-    """Everything training may read: train, calibration, items, users (never test)."""
+    """Everything training may read: train, calibration, items, users, side features (never test)."""
     from cp4285_proj.data import schema
 
     return {
@@ -146,4 +152,6 @@ def load_split_frames(directory: Path) -> dict[str, pl.DataFrame]:
         "calibration": schema.load_calibration(directory),
         "items": schema.load_items(directory),
         "users": schema.load_users(directory),
+        "user_features": schema.load_user_features(directory),
+        "item_features": schema.load_item_features(directory),
     }

@@ -158,7 +158,11 @@ If any file is missing or has the wrong row count, preprocessing fails before it
    - Tertiles are equal-size and rank-based: users are ranked by `(value, user_idx)` and split into thirds, the same way as the item bins.
    - `hist_pop_dist[5]` / `hist_dur_dist[5]`: share of the user's train rows in each `pop_bin` / `dur_bin`, for calibration KL.
    - `role`: `calibration` | `test` | `train_only`. In this release every one of the 27,285 users is in the random log, so `train_only` is empty.
-8. **Manifest and sanity checks** (`manifest.json`):
+8. **Categorical side features** (static metadata, no log rows; added for the feature propensity of §13.6 and a later DeepFM backbone). `user_features.parquet` and `item_features.parquet` hold one Int32 code per field, where 0 = missing and 1..K are the distinct raw values sorted as strings.
+   - User fields (`schema.USER_FEATURES`): `user_active_degree`, `is_live_streamer`, `is_video_author`, the four `*_range` columns (follow, fans, friend, register days) and `onehot_feat0`–`onehot_feat17`. Raw counts are left out because their `*_range` bins are kept, and `is_lowactive_period` is constant in this release.
+   - Item fields (`schema.ITEM_FEATURES`): `video_type`, `upload_type`, `upload_dt`, `music_type`, `tag`, `orientation` (portrait / landscape / square, from `server_height` against `server_width`) and `duration_decile`. The deciles are 10 equal-size bins of the pool ranked by `(duration_ms, video_id)`, i.e. catalogue bins that use no log rows. Left out: `author_id` and `music_id`, which are near-identifiers, and `visible_status`, which is constant.
+   - Adding these two files left the five existing outputs byte-identical (same `output_files` hashes); only `manifest.json` changed.
+9. **Manifest and sanity checks** (`manifest.json`):
    - hashes of the input files;
    - `split_seed` and the config snapshot;
    - row counts per part;
@@ -216,7 +220,11 @@ dur_pref_group: str
 hist_pop_dist: list[float32]  # length 5; null if no_history
 hist_dur_dist: list[float32]  # length 5; null if no_history
 
-# manifest.json (see §4.2 step 8)
+# user_features.parquet / item_features.parquet (one row per user / pool item, sorted by user_idx / item_idx)
+user_idx | item_idx: int32
+<field>: int32               # one column per schema.USER_FEATURES / schema.ITEM_FEATURES field; 0 = missing
+
+# manifest.json (see §4.2 step 9)
 ```
 
 `test.parquet` is read only through `data.schema.load_test(token)` (see §9).
@@ -249,6 +257,8 @@ class TrainData:
     target: torch.Tensor        # float32 [N]; the training label (soft target for watch_ratio)
     extras: dict[str, torch.Tensor]  # other label columns, time, tab: for future weighting hooks
     items: "ItemTensors"        # pop_exposure, pop_bin, dur_bin, duration_ms on device, indexed by item_idx
+    user_features: torch.Tensor # int64 [n_users, F_u] categorical codes (§4.2 step 8)
+    item_features: torch.Tensor # int64 [n_items, F_i]
     n_users: int
     n_items: int
 
@@ -569,7 +579,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
    - Every random-log row (after the drop) is in exactly one of calibration or test.
    - `train.parquet` has 1,141,112 − 24,076 rows.
 3. Running `kr-preprocess` twice gives the same output hashes in `manifest.json`.
-4. The manifest contains every count and check in §4.2 step 8.
+4. The manifest contains every count and check in §4.2 step 9.
 5. Popularity, bins, head, user groups and history distributions depend only on train rows: changing any calibration or test label leaves `items.parquet`, except `is_clickbait`, and `users.parquet` unchanged. `is_clickbait` depends on calibration rows only: changing test labels leaves it unchanged.
 6. `kr-train configs/experiments/mf_click.toml` trains Naive MF on the GPU and writes everything in §6 for calibration. The calibration GAUC at the best epoch is above 0.5. With `deterministic = true`, two runs with the same seed give the same `best_selection_score`.
 7. `kr-train` with a training label that the recommender does not support (e.g. `click` for `d2q`) fails at config load with an error naming the unsupported label.
@@ -606,7 +616,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 | IPS / SNIPS / DR | `sample_weight` / `loss`; diagnostics (max weight, ESS) logged once per run from `fit` (IPS: §13.3) |
 | D2Q / duration-quantile label | `batch_loss` with a target built in `fit` + `adjust_scores` (§13.2) |
 | AutoDebias | a `Recommender` whose `fit` also consumes calibration rows; flagged `uses_calibration_for_training` in MLflow |
-| DeepFM | new `Backbone` reading user/video feature tensors |
+| DeepFM | new `Backbone` reading `TrainData.user_features` / `item_features` (§4.2 step 8) |
 | Raw watch time training | done: Naive MF regression + NDCG@10 selection (§13.2) |
 | Paired tests + Holm | `evaluation/bootstrap.py` over `per_user.parquet` of two sweeps |
 | New metrics | one `@register_metric` function + one `panel.toml` entry |
@@ -657,3 +667,12 @@ Common protocol, so that only the correction varies:
 - **Training** (Eq. 8): `BCE(ŷ_k σ(ŷ_i) σ(ŷ_u)) + α BCE(ŷ_i) + β BCE(ŷ_u)` on the logged exposures, with the paper's defaults `α = β = 1e-3`.
 - **Inference** (Eq. 9): rank by `(ŷ_k − c) σ(ŷ_i) σ(ŷ_u)`. `c = 0` ranks by the total effect, i.e. MACR's training without counterfactual inference.
 - **Knob:** `c ∈ {0, 10, 20, 30, 40, 60, 100}`. This covers the paper's tuned range {20, …, 40}. With the paper's α and β, the learned `σ(ŷ_i)` spans only about 0.98–1.00 on `guarded`, so `c` has to be large before `c · Δσ(ŷ_i)` competes with the spread of `ŷ_k` (about −1.6 to 1.0 between the 1st and 99th percentiles). A calibration-only check on one tuning model gave an unmasked top-10 ARP, over 3,000 calibration users, of 1,968 → 869 as `c` goes from 0 to 100, while calibration GAUC fell from 0.5460 to 0.5434.
+
+### 13.6 IPS with a feature-based propensity (`recommenders/ips_feature.py`, `configs/recommenders/ips_feature.toml`)
+
+- **Propensity model:** a factorization machine (logit = `b + Σ_f w[x_f] + Σ_{f<g} ⟨v[x_f], v[x_g]⟩`, factor size 8) over the 25 user fields and 7 item fields of §4.2 step 8. It has no user or item ids, so it cannot memorise item popularity. Schnabel et al.'s covariate propensity is a logistic regression; the FM is that regression plus pairwise interactions, which are needed for the reason in the next bullet.
+- **Training,** inside `fit`, before the MF: every logged train exposure `(u, i)` is a positive and gets one negative `(u, j)`, with `j` uniform over the pool. Negatives are redrawn every epoch. The loss is BCE(pos) + BCE(neg), trained with Adam (lr 1e-2, batch 65,536) for 15 epochs. On `guarded` the loss plateaus by then: 1.2507 after 5 epochs, 1.2123 after 10, 1.2065 after 15. The generator is seeded with the run seed, so the propensity varies with the seed like every other part of the run.
+  - With 1:1 matched sampling the odds estimate `P_log(i | u) / P_uniform(i | u)`, so the inverse propensity of a train row is `exp(−logit)`. This is the same target as the popularity propensity, uniform item exposure for each user, but conditioned on features.
+  - Because each negative has the positive's user, user-only terms cannot separate the classes. User fields act only through their interactions with item fields, which makes the propensity user-dependent.
+- **Weights, clipping and loss:** IPS's (§13.3). **Extra diagnostics:** `propensity_loss` per epoch; `propensity_auc`, the AUC of 200k logged rows against as many fresh uniform negatives; and `propensity_pop_spearman`, the Spearman correlation between the feature and popularity inverse propensities over train rows. For seed 0 on `guarded`: AUC 0.734 and Spearman 0.459. The unclipped max/min weight ratio is about 6.4·10⁴, against 9,110 for the popularity propensity.
+- **Knob:** `clip ∈ {10, 30, 100, 300, 1000, 2000, 4000, 8000, inf}`, with the same definition as in IPS (largest weight relative to the smallest). The smallest FM weight is an outlier: the 1st percentile of w/min is 68 and the median is 386. So clips up to 300 clip 64–100% of rows and leave the model close to Naive MF. The informative range is 300–8000, with seed-0 ESS shares 0.95, 0.73, 0.59, 0.49 and 0.44 at 300, 1000, 2000, 4000 and 8000, and 0.41 unclipped. Compare propensity models on the logged ESS share, not on the raw `clip` value.

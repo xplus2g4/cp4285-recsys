@@ -15,6 +15,7 @@ random-exposure log.
 | `ips` | IPS, popularity propensity (Schnabel et al. ICML '16), spec §13.3 | `ips_click.toml` | `--model.clip c` |
 | `snips` | SNIPS, IPS weights with batch self-normalisation (Swaminathan & Joachims NeurIPS '15), spec §13.4 | `snips_click.toml` | `--model.clip c` |
 | `macr` | MACR (Wei et al. KDD '21), spec §13.5 | `macr_click.toml` | `--model.c c` |
+| `ips_feature` | IPS, feature-based (FM) propensity, spec §13.6 | `ips_feature_click.toml` | `--model.clip c` |
 
 Training labels without a binary relevance (`raw_watch_time`) are selected by calibration NDCG@10 instead of GAUC.
 
@@ -40,7 +41,7 @@ Tracking goes to MLflow on `sqlite:///mlflow.db`, experiment `kuairand-bias-pane
 
 | Command | What it does |
 |---|---|
-| `uv run kr-preprocess --split guarded` | Checks raw row counts, drops the 239 items without duration, splits the random log 30/70 by user into calibration/test, computes train-only item/user metadata, writes `data/processed/guarded/` and `manifest.json` (hashes, counts, sanity checks). Deterministic. |
+| `uv run kr-preprocess --split guarded` | Checks raw row counts, drops the 239 items without duration, splits the random log 30/70 by user into calibration/test, computes train-only item/user metadata and categorical user/item side features, writes `data/processed/guarded/` and `manifest.json` (hashes, counts, sanity checks). Deterministic. |
 | `uv run kr-train configs/experiments/mf_click.toml [--seed N] [--final]` | Trains one configuration on the GPU with early stopping on calibration GAUC; writes `best.pt`, `config.toml`, `fit.json` and calibration predictions. |
 | `uv run kr-sweep configs/experiments/mf_click.toml` | Tuning stage (the recommender's `[search]` grid, at most `tuning_budget` points, seed 0), then the best point retrained with `final_seeds`; final runs are tagged `final=true`, `sweep_id=<id>`. |
 | `uv run kr-evaluate <run_id> --split calibration\|test [--reason TEXT]` | Runs `configs/panel.toml` on saved predictions; writes `eval/<split>/<panel_hash>/{per_user.parquet,summary.json,bootstrap.json}`. Test evaluation needs a finished `final=true` run, writes test predictions on first use, and counts evaluations (`test_eval_count`, `eval/test/log.jsonl`). |

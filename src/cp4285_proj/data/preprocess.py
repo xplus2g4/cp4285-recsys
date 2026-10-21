@@ -17,7 +17,7 @@ from scipy import stats
 
 from cp4285_proj.config import DataConfig
 from cp4285_proj.data.labels import LABELS
-from cp4285_proj.data.schema import NO_HISTORY, PART_SCHEMA, USERS_SCHEMA, file_sha256, validate_schema
+from cp4285_proj.data.schema import ITEM_FEATURES, NO_HISTORY, PART_SCHEMA, USER_FEATURES, USERS_SCHEMA, file_sha256, validate_schema
 
 # Measured row counts (spec §4.1). `video_features_statistic_pure.csv` is deliberately absent: it is
 # averaged over both log windows, so it leaks the test window, and is never read.
@@ -54,7 +54,8 @@ ACTIVITY_LEVELS = frozenset(
 ACTIVITY_MAP = {"high_active": "high", "full_active": "full", "middle_active": "middle"}  # everything else → other
 SPLITS = ("guarded",)
 PARTS = ("train", "calibration", "test")
-OUTPUT_FILES = ("train", "calibration", "test", "items", "users")
+OUTPUT_FILES = ("train", "calibration", "test", "items", "users", "user_features", "item_features")
+DURATION_DECILES = 10  # catalogue duration bins of the item features (pool ranks, no log rows)
 
 
 class PreprocessError(RuntimeError):
@@ -71,7 +72,7 @@ class RawData:
 
 @dataclass(frozen=True)
 class Built:
-    frames: dict[str, pl.DataFrame]  # train, calibration, test, items, users
+    frames: dict[str, pl.DataFrame]  # train, calibration, test, items, users, user_features, item_features
     manifest: dict[str, Any]  # everything except input/output hashes
 
 
@@ -149,6 +150,13 @@ def sparse_spearman(user: np.ndarray, item: np.ndarray, count: np.ndarray, refer
     var_r = z * r0 * r0 + sum_r2_nz - n * m * m
     with np.errstate(invalid="ignore", divide="ignore"):
         return (sum_rs - n * m * m) / np.sqrt(var_r * var_s)
+
+
+def categorical_codes(col: pl.Series) -> pl.Series:
+    """Int32 codes: 0 = missing, 1..K = the distinct values sorted as strings (deterministic)."""
+    s = col.cast(pl.String)
+    levels = sorted(s.drop_nulls().unique().to_list())
+    return s.replace_strict(levels, list(range(1, len(levels) + 1)), default=0, return_dtype=pl.Int32).alias(col.name)
 
 
 def _quantiles(values: np.ndarray) -> dict[str, float]:
@@ -332,8 +340,36 @@ def build_split(raw: RawData, cfg: DataConfig, split: str = "guarded") -> Built:
     )
     users_out = validate_schema(users_out, "users")
 
-    # 8. manifest body
-    frames = {"train": train, "calibration": calibration, "test": test, "items": items, "users": users_out}
+    # 8. categorical side features (static metadata; no log rows involved)
+    user_features = pl.DataFrame({"user_idx": user_idx}, schema={"user_idx": pl.Int32}).with_columns(
+        categorical_codes(raw.users[c]) for c in USER_FEATURES
+    )
+    video = pool.select("item_idx", "video_id").join(raw.videos.with_columns(pl.col("video_id").cast(pl.Int32)), on="video_id", how="left")
+    orientation = (
+        pl.when(pl.col("server_height") > pl.col("server_width"))
+        .then(pl.lit("portrait"))
+        .when(pl.col("server_height") < pl.col("server_width"))
+        .then(pl.lit("landscape"))
+        .otherwise(pl.lit("square"))
+    )
+    video = video.with_columns(orientation.alias("orientation"))
+    item_features = pl.DataFrame({"item_idx": pool["item_idx"]}).with_columns(
+        *(categorical_codes(video[c]) for c in ITEM_FEATURES if c != "duration_decile"),
+        pl.Series("duration_decile", _equal_bins(dur_rank, DURATION_DECILES) + 1, dtype=pl.Int32),
+    )
+    user_features = validate_schema(user_features, "user_features")
+    item_features = validate_schema(item_features, "item_features")
+
+    # 9. manifest body
+    frames = {
+        "train": train,
+        "calibration": calibration,
+        "test": test,
+        "items": items,
+        "users": users_out,
+        "user_features": user_features,
+        "item_features": item_features,
+    }
     manifest = _manifest(raw, cfg, split, frames, std_drop, rnd_drop, dropped_ids, random, thr=(thr_click, thr_wr, thr_hate), supported=supported)
     _check_expected(manifest)
     return Built(frames=frames, manifest=manifest)

@@ -56,12 +56,30 @@ USERS_SCHEMA: dict[str, pl.DataType] = {
     "hist_dur_dist": pl.List(pl.Float32()),
 }
 
+# Categorical side features (spec §4.2 step 9). Every column is an Int32 code: 0 = missing, 1..K = the sorted
+# distinct raw values. Static metadata only; `video_features_statistic_pure.csv` is never read.
+USER_FEATURES: tuple[str, ...] = (
+    "user_active_degree",
+    "is_live_streamer",
+    "is_video_author",
+    "follow_user_num_range",
+    "fans_user_num_range",
+    "friend_user_num_range",
+    "register_days_range",
+    *(f"onehot_feat{k}" for k in range(18)),
+)
+ITEM_FEATURES: tuple[str, ...] = ("video_type", "upload_type", "upload_dt", "music_type", "tag", "orientation", "duration_decile")
+USER_FEATURES_SCHEMA: dict[str, pl.DataType] = {"user_idx": pl.Int32(), **{c: pl.Int32() for c in USER_FEATURES}}
+ITEM_FEATURES_SCHEMA: dict[str, pl.DataType] = {"item_idx": pl.Int32(), **{c: pl.Int32() for c in ITEM_FEATURES}}
+
 SCHEMAS = {
     "train": PART_SCHEMA,
     "calibration": PART_SCHEMA,
     "test": PART_SCHEMA,
     "items": ITEMS_SCHEMA,
     "users": USERS_SCHEMA,
+    "user_features": USER_FEATURES_SCHEMA,
+    "item_features": ITEM_FEATURES_SCHEMA,
 }
 
 NO_HISTORY = "no_history"
@@ -114,6 +132,14 @@ def load_items(directory: Path) -> pl.DataFrame:
 
 def load_users(directory: Path) -> pl.DataFrame:
     return _read(directory, "users")
+
+
+def load_user_features(directory: Path) -> pl.DataFrame:
+    return _read(directory, "user_features")
+
+
+def load_item_features(directory: Path) -> pl.DataFrame:
+    return _read(directory, "item_features")
 
 
 def load_manifest(directory: Path) -> dict[str, Any]:
