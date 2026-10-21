@@ -603,7 +603,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 |---|---|
 | `full` split | `data/preprocess.py` split definition; `experiments/*.toml` `split = "full"` |
 | PDA / MACR | `TorchRecommender.adjust_scores` + `batch_loss` (PDA: §13.1) |
-| IPS / SNIPS / DR | `sample_weight` / `loss`; diagnostics (max weight, ESS) logged from `training/loop.py` |
+| IPS / SNIPS / DR | `sample_weight` / `loss`; diagnostics (max weight, ESS) logged once per run from `fit` (IPS: §13.3) |
 | D2Q / duration-quantile label | `batch_loss` with a target built in `fit` + `adjust_scores` (§13.2) |
 | AutoDebias | a `Recommender` whose `fit` also consumes calibration rows; flagged `uses_calibration_for_training` in MLflow |
 | DeepFM | new `Backbone` reading user/video feature tensors |
@@ -635,3 +635,11 @@ Common protocol, so that only the correction varies:
   - The training target of a row is its watch-time ECDF value within its group, Φ̂_k(w) = #{w' ≤ w} / n_k. The model is one MF, h = σ(f(u, i)), trained with soft-target BCE (the pipeline's convention for [0, 1] targets, e.g. `watch_ratio`). BCE has the same minimiser as the paper's MSE, E[Φ̂_k(w) | u, i]. The item id already identifies the duration group, so the paper's duration input feature is not needed.
   - Inference with `rank_by = "watch_time"` (the published D2Q) ranks by Φ̂_k⁻¹(h). The inverse CDF of each group is stored at 1,001 levels and interpolated linearly. With `rank_by = "quantile"`, it ranks by h, which is the methodology's duration-quantile label. Item groups and inverse CDFs are backbone buffers, saved in `best.pt`. Items outside the train duration range take the first or last group.
 - **Knob:** `n_groups ∈ {1, 10, 20, 30, 60, 100}`: the paper's grid {1, 10, 20, 30, 50, 100}, with 50 replaced by 60, the KuaiRand-Pure setting used by D2Co and CWM. Each value is run once per `rank_by`. With `n_groups = 1`, both rankings are monotone in h and differ only through ties of the inverse CDF.
+
+### 13.3 IPS with a popularity propensity (`recommenders/ips.py`, `configs/recommenders/ips.toml`)
+
+- **Target of the correction:** the loss under uniform item exposure, which is the condition of the random-exposure log. The popularity propensity of a row's item is `p_i = n_i / max_j n_j`, with `n_i = pop_exposure`, the item's train exposure count. Items with no train rows never need a weight. The exponent is 1, so `1/p` is the item-marginal density ratio between uniform and logged exposure. Exposure counts are used rather than click counts because the logs record exposures, and with exposure counts an exponent of 1 is the exact marginal ratio. The square-root smoothing that some methods apply to click-count propensities is not used: clipping is the only variance control.
+- **Weights:** `w = 1/p` rescaled so that the smallest weight is 1, clipped at `clip`, then divided by the train mean. After rescaling, `clip` is the largest allowed ratio between any two weights. How much a given `clip` clips depends on the tail of the propensity model, so compare models on the logged ESS share.
+- **Loss:** `mean(w · BCE)` over the batch. Because the weights have train mean 1, this is the IPS estimator with its fixed normaliser. The weighted default of `TorchRecommender.loss`, `Σ w·ℓ / Σ w` per batch, is SNIPS (§13.4).
+- **Diagnostics,** logged once per run to MLflow and `train_log.jsonl`: `ips_max_weight` (after normalisation), `ips_ess_share` = (Σw)² / (N Σw²), and `ips_clipped_share`. On `guarded`, the unclipped weights have a maximum of 153 and an ESS share of 0.105.
+- **Knob:** `clip ∈ {10, 30, 100, 300, 1000, inf}`. On `guarded` this spans ESS shares of 0.91, 0.74, 0.50, 0.31, 0.18 and 0.105. A clip of 3 already clips 91% of rows and is almost Naive MF.
