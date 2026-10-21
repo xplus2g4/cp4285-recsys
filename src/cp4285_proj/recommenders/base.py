@@ -80,7 +80,7 @@ class FitContext:
     label: LabelSpec
     device: torch.device
     seed: int
-    selection: SelectionFn  # pipeline-owned: (Recommender) -> float, calibration GAUC
+    selection: SelectionFn  # pipeline-owned: (Recommender) -> float, calibration GAUC (NDCG@10 without relevance)
     calibration: CandidateSet  # for selection only; the model never sees calibration labels as training data
     log: RunLogger  # MLflow + file logging
 

@@ -18,6 +18,7 @@ class LabelSpec:
     expr: Callable[[float], pl.Expr]  # raw log columns → label column, given watch_ratio_cap
     relevance: Callable[[np.ndarray], np.ndarray] | None  # label values → bool; None = no binary relevance
     ndcg_gain: Literal["value", "user_minmax"] = "value"  # NDCG gain: label value, or min-max scaled within user
+    unit_interval: bool = True  # values lie in [0, 1], so the label is a BCE target; False → regression target
 
     @property
     def has_relevance(self) -> bool:
@@ -59,7 +60,7 @@ LABELS: dict[str, LabelSpec] = {
             lambda cap: pl.min_horizontal(pl.col("play_time_ms") / pl.col("duration_ms"), pl.lit(cap)).cast(pl.Float32),
             _full_play,
         ),
-        LabelSpec("raw_watch_time", "graded", pl.Int64, lambda cap: pl.col("play_time_ms").cast(pl.Int64), None, "user_minmax"),
+        LabelSpec("raw_watch_time", "graded", pl.Int64, lambda cap: pl.col("play_time_ms").cast(pl.Int64), None, "user_minmax", False),
     )
 }
 

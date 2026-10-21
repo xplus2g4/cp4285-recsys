@@ -93,7 +93,7 @@ def train_one(
         )
         result = model.fit(data.train, ctx)
         fit = dataclasses.asdict(result)
-        print(f"[{run_id[:8]}] seed={seed} {stage}: best epoch {result.best_epoch}, cal GAUC {result.best_selection_score:.5f}")
+        print(f"[{run_id[:8]}] seed={seed} {stage}: best epoch {result.best_epoch}, cal selection {result.best_selection_score:.5f}")
 
         model.save(run_dir / "best.pt")
         snapshot = {

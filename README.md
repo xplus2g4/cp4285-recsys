@@ -9,8 +9,11 @@ random-exposure log.
 
 | Name | Method | Experiment files | Frontier knob (one sweep per value) |
 |---|---|---|---|
-| `mf` | Naive MF | `mf_<label>.toml` | — |
+| `mf` | Naive MF; on `raw_watch_time` the VR regression baseline (spec §13.2) | `mf_<label>.toml` | — |
 | `pda` | PD / PDA (Zhang et al. SIGIR '21), spec §13.1 | `pda_click.toml` | `--model.gamma g` with `--model.gamma_infer 0` (PD) or `g` (PDA) |
+| `d2q` | D2Q (Zhan et al. KDD '22), spec §13.2 | `d2q_raw_watch_time.toml` | `--model.n_groups M` with `--model.rank_by watch_time` (D2Q) or `quantile` |
+
+Training labels without a binary relevance (`raw_watch_time`) are selected by calibration NDCG@10 instead of GAUC.
 
 Every method tunes the shared MF backbone on the same `lr × weight_decay` grid. A frontier point is one
 `kr-sweep` with the knob fixed on the command line, e.g.
