@@ -1,0 +1,19 @@
+# PD / PDA (Zhang et al., SIGIR '21) on the MF backbone (spec §13.1).
+# Frontier: sweep `gamma` with `gamma_infer = 0` (PD) and with `gamma_infer = gamma` (PDA, the paper's practice).
+[model]
+embedding_dim = 64
+n_stages = 10        # equal-time stages over the train window; local popularity is per stage
+gamma = 0.1          # training exponent on local popularity
+gamma_infer = 0.1    # inference exponent on last-stage popularity; 0 = PD
+
+[train]
+optimizer = "adam"
+lr = 3e-3
+weight_decay = 1e-6
+batch_size = 8192
+max_epochs = 50
+patience = 5
+
+[search]           # the MF grid: every method tunes the shared backbone the same way
+lr = [1e-3, 3e-3, 1e-2]
+weight_decay = [0.0, 1e-6, 1e-5]

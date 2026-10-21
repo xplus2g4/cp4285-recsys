@@ -2,8 +2,19 @@
 
 Iteration 1 of the pipeline specified in [`docs/spec_pipeline.md`](docs/spec_pipeline.md) (research context:
 [`docs/draft_methodology.md`](docs/draft_methodology.md)). It preprocesses KuaiRand-Pure once into a frozen split,
-trains recommenders through one interface (Naive MF only for now), and evaluates them with an editable metric
-panel on the random-exposure log.
+trains recommenders through one interface, and evaluates them with an editable metric panel on the
+random-exposure log.
+
+## Recommenders
+
+| Name | Method | Experiment files | Frontier knob (one sweep per value) |
+|---|---|---|---|
+| `mf` | Naive MF | `mf_<label>.toml` | — |
+| `pda` | PD / PDA (Zhang et al. SIGIR '21), spec §13.1 | `pda_click.toml` | `--model.gamma g` with `--model.gamma_infer 0` (PD) or `g` (PDA) |
+
+Every method tunes the shared MF backbone on the same `lr × weight_decay` grid. A frontier point is one
+`kr-sweep` with the knob fixed on the command line, e.g.
+`uv run kr-sweep configs/experiments/pda_click.toml --model.gamma 0.1 --model.gamma_infer 0.1`.
 
 ## Setup
 
@@ -83,7 +94,7 @@ and `k` beyond the saved top-K width (the error names the `kr-rescore` command) 
        def build_backbone(self, n_users, n_items):
            return MFBackbone(n_users, n_items, self.model_cfg.embedding_dim)
 
-       # override only what the method changes, e.g. sample_weight (IPS), loss, adjust_scores (PDA)
+       # override only what the method changes: batch_loss, sample_weight, loss, adjust_scores (PDA: batch_loss + adjust_scores)
    ```
 
    Anything that is not a `TorchRecommender` only has to satisfy the `Recommender` protocol in

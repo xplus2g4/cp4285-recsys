@@ -102,8 +102,7 @@ def run(model: TorchRecommender, train: TrainData, ctx: FitContext) -> FitResult
         for s in range(0, n, cfg.batch_size):
             idx = perm[s : s + cfg.batch_size]
             batch = Batch(idx=idx, user=train.user[idx], item=train.item[idx], target=train.target[idx], train=train)
-            logits = model.backbone(batch.user, batch.item)
-            loss = model.loss(logits, batch.target, model.sample_weight(batch))
+            loss = model.batch_loss(batch)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
