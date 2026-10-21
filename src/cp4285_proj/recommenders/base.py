@@ -134,7 +134,7 @@ class Backbone(nn.Module):
 
 class TorchRecommender(Recommender):
     """Generic torch implementation. Subclasses provide `build_backbone` and may override hooks.
-    Iteration 1 uses only the defaults.
+    Naive MF uses only the defaults.
 
     Construction (not part of the pipeline surface): `cls(model_cfg, train_cfg)` where `model_cfg` is an
     instance of the subclass's `model_config_cls`. `supported_labels` is checked at config load.
@@ -158,17 +158,24 @@ class TorchRecommender(Recommender):
         return torch.optim.Adam(self.backbone.parameters(), lr=self.train_cfg.lr, weight_decay=self.train_cfg.weight_decay)
 
     # hooks (defaults are the naive behaviour)
-    def sample_weight(self, batch: Batch) -> torch.Tensor | None:  # default None → unweighted (IPS/SNIPS/DR later)
+    def batch_loss(self, batch: Batch) -> torch.Tensor:
+        """Training loss of one batch. Override when the training-time score is not the backbone logit
+        (PDA's popularity term, MACR's branches) or the target is transformed (D2Q)."""
+        return self.loss(self.backbone(batch.user, batch.item), batch.target, self.sample_weight(batch))
+
+    def sample_weight(self, batch: Batch) -> torch.Tensor | None:  # default None → unweighted
         return None
 
     def loss(self, logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor | None) -> torch.Tensor:
+        """BCE with logits; with weights, Σ w·ℓ / Σ w over the batch."""
         if weight is None:
             return nn.functional.binary_cross_entropy_with_logits(logits, target)
         per_row = nn.functional.binary_cross_entropy_with_logits(logits, target, reduction="none")
         return (per_row * weight).sum() / weight.sum()
 
     def adjust_scores(self, logits: torch.Tensor, user: torch.Tensor, item: torch.Tensor | None) -> torch.Tensor:
-        return logits  # inference-time correction (PDA/MACR later)
+        """Inference-time correction of backbone logits; `item is None` means `logits` is [B, n_items]."""
+        return logits
 
     # fit → training.loop.run(self, train, ctx); score/recommend → backbone + adjust_scores + masking
     def fit(self, train: TrainData, ctx: FitContext) -> FitResult:

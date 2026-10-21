@@ -290,19 +290,21 @@ class Backbone(nn.Module):
 
 class TorchRecommender(Recommender):
     """Generic torch implementation. Subclasses provide `build_backbone` and may override hooks.
-    Iteration 1 uses only the defaults."""
+    Naive MF uses only the defaults."""
     backbone: Backbone
 
     def build_backbone(self, n_users: int, n_items: int) -> Backbone: ...
     def configure_optimizer(self) -> torch.optim.Optimizer: ...       # default: Adam(lr, weight_decay)
 
     # hooks (defaults are the naive behaviour)
+    def batch_loss(self, batch: "Batch") -> torch.Tensor:             # default: loss(backbone(u, i), target, sample_weight(batch))
+        ...                                                            # overridden when the training score or target differs (PDA)
     def sample_weight(self, batch: "Batch") -> torch.Tensor | None:   # default None → unweighted (IPS/SNIPS/DR later)
         return None
     def loss(self, logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor | None) -> torch.Tensor:
-        ...                                                            # default: BCEWithLogits, mean (weighted if weight)
+        ...                                                            # default: BCEWithLogits, mean (Σ w·ℓ / Σ w if weight)
     def adjust_scores(self, logits: torch.Tensor, user: torch.Tensor, item: torch.Tensor | None) -> torch.Tensor:
-        return logits                                                  # inference-time correction (PDA/MACR later)
+        return logits                                                  # inference-time correction (PDA, MACR later)
 
     # fit → training.loop.run(self, train, ctx); score/recommend → backbone + adjust_scores + masking
 ```
@@ -354,7 +356,7 @@ weight_decay = [0.0, 1e-6, 1e-5]
 
 - **Seeding:** `random`, `numpy` and `torch` (including CUDA). `torch.use_deterministic_algorithms(True)` with `CUBLAS_WORKSPACE_CONFIG=:4096:8` when `pipeline.deterministic = true`, which is the default.
 - **Data on the GPU:** `TrainData` is built once on the device. Each epoch draws `torch.randperm(N, device=…)` and slices batches by index.
-- **Per batch:** forward → `sample_weight` → `loss` → step.
+- **Per batch:** `batch_loss` (by default forward → `sample_weight` → `loss`) → step.
 - **After each epoch:** `selection = ctx.selection(model)`. This is calibration GAUC under the training label's binary relevance, computed from `score` over the calibration candidate rows. The best `state_dict` is kept in memory. Training stops when `patience` epochs pass without improvement or `max_epochs` is reached.
 - **Logged to MLflow per epoch:** `train_loss`, `cal_selection`, `epoch_time_s`.
 
@@ -599,7 +601,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 | Addition | Where it plugs in |
 |---|---|
 | `full` split | `data/preprocess.py` split definition; `experiments/*.toml` `split = "full"` |
-| PDA / MACR | `TorchRecommender.adjust_scores` (+ training-time popularity term in `loss`) |
+| PDA / MACR | `TorchRecommender.adjust_scores` + `batch_loss` (PDA: §13.1) |
 | IPS / SNIPS / DR | `sample_weight` / `loss`; diagnostics (max weight, ESS) logged from `training/loop.py` |
 | D2Q / duration-quantile label | new `LabelSpec` in `data/labels.py` (+ `extras` in `TrainData`) |
 | AutoDebias | a `Recommender` whose `fit` also consumes calibration rows; flagged `uses_calibration_for_training` in MLflow |
@@ -607,3 +609,18 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 | Raw watch time training | regression `loss` + selection on NDCG (needs a pipeline decision because the selection rule is GAUC) |
 | Paired tests + Holm | `evaluation/bootstrap.py` over `per_user.parquet` of two sweeps |
 | New metrics | one `@register_metric` function + one `panel.toml` entry |
+
+## 13. Recommenders beyond iteration 1
+
+Common protocol, so that only the correction varies:
+- Every method uses the MF backbone of §5.3 (embedding size 64, the same initialisation, and the same restore of rows with no train data) and the MF `[search]` grid (`lr × weight_decay`, 9 points, so the tuning budget never samples).
+- A method's frontier knob is not in `[search]`. Each knob value is one `kr-sweep` with `--model.<knob> <value>` (tuning, then 5 final seeds), and the curve is the set of those sweeps. Calibration selection always scores the method's inference-time output (`score` → `adjust_scores`).
+- The training loop calls `batch_loss(batch)` once per batch (§5.4). Its default is `loss(backbone(u, i), target, sample_weight(batch))`, so Naive MF is unchanged: a deterministic rerun reproduces the iteration-1 tuning scores exactly.
+
+### 13.1 PD / PDA (`recommenders/pda.py`, `configs/recommenders/pda.toml`)
+
+- **Training:** `logit(u, i, row) = f(u, i) + γ · log m_i^t`, BCE on the logged exposures, where `f` is the MF backbone and `t` is the row's stage.
+  - The paper's `P(c | u, i, m) = ELU'(f) · m^γ` with BPR is moved to logit space, i.e. the odds factorise as `e^f · m^γ`. This keeps the pointwise BCE of §5.3. PD's ranking by `f` remains exact, because `Σ_z P(z) σ(f + γ log z)` increases with `f`.
+  - Local popularity: the train window is cut into `n_stages = 10` equal-time stages (the paper's 10; on `guarded` the last stage holds 27,619 rows). `m_i^t = (c_i^t + 1) / (N_t + n_items) · n_items`, where `c_i^t` counts the item's train **exposures** in stage `t`. Exposures, not clicks, because the confounding path is popularity → exposure and the logs record exposures directly. Add-one smoothing keeps items unseen in a stage finite, and the `n_items` factor centres a uniformly exposed item at `log m = 0`.
+- **Inference:** `f(u, i) + γ̃ · log m̃_i`, with `m̃_i` the last-stage popularity (the paper's method (a); its linear forecast (b) is not implemented). `γ̃ = 0` is PD and `γ̃ > 0` is PDA. `m̃` is a buffer of the backbone and is saved in `best.pt`.
+- **Knob:** `gamma ∈ {0.02, 0.05, 0.1, 0.15, 0.2, 0.25}` (the paper's search range), each once with `gamma_infer = 0` (PD) and once with `gamma_infer = gamma` (PDA, the paper's practice). `gamma = gamma_infer = 0` is exactly Naive MF.
