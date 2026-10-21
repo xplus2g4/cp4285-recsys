@@ -643,3 +643,9 @@ Common protocol, so that only the correction varies:
 - **Loss:** `mean(w · BCE)` over the batch. Because the weights have train mean 1, this is the IPS estimator with its fixed normaliser. The weighted default of `TorchRecommender.loss`, `Σ w·ℓ / Σ w` per batch, is SNIPS (§13.4).
 - **Diagnostics,** logged once per run to MLflow and `train_log.jsonl`: `ips_max_weight` (after normalisation), `ips_ess_share` = (Σw)² / (N Σw²), and `ips_clipped_share`. On `guarded`, the unclipped weights have a maximum of 153 and an ESS share of 0.105.
 - **Knob:** `clip ∈ {10, 30, 100, 300, 1000, inf}`. On `guarded` this spans ESS shares of 0.91, 0.74, 0.50, 0.31, 0.18 and 0.105. A clip of 3 already clips 91% of rows and is almost Naive MF.
+
+### 13.4 SNIPS (`recommenders/snips.py`, `configs/recommenders/snips.toml`)
+
+- Same propensity, weights, clipping and diagnostics as IPS (§13.3). The loss is `Σ w·BCE / Σ w` over the batch, the self-normalised estimator.
+- The propensities do not depend on the model, so over the full train set the SNIPS normaliser `Σ w` is a constant. SNIPS and IPS therefore share a minimiser, and SNIPS's control variate (Swaminathan & Joachims) acts only through the per-batch normaliser. Each batch's loss becomes a convex combination of its per-row losses, so batches that draw a few very large weights do not take larger steps. The difference should grow with `clip` and vanish as the weights become uniform.
+- **Knob:** the IPS grid, `clip ∈ {10, 30, 100, 300, 1000, inf}`.
