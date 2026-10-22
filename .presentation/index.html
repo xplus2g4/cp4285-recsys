@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trade-offs of single-bias debiasing — progress report</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/data.js"></script>
+<script src="assets/glossary.js"></script>
+<script src="assets/charts.js"></script>
+<style>
+  .flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; margin: 12px 0; }
+  .flow .box { flex: 1 1 170px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; font-size: 14px; }
+  .flow .box b { display: block; margin-bottom: 2px; }
+  .flow .arrow { align-self: center; font-size: 22px; color: var(--muted); }
+  .flow .box.train { border-color: #fecaca; background: #fff7f7; }
+  .flow .box.eval { border-color: #bbf7d0; background: #f6fef8; }
+  .audit td.target, .audit th.target { box-shadow: inset 0 0 0 2px #1d4ed8; }
+  .audit select { font: inherit; font-size: 12px; padding: 0 2px; }
+  table.audit th, table.audit td { padding: 4px 5px; font-size: 12px; }
+  main { max-width: 1320px; }
+  table.audit thead th { white-space: normal; min-width: 52px; }
+  .audit thead tr.grp th { text-align: center; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .checks label { margin-right: 12px; font-size: 14px; white-space: nowrap; }
+  .checks i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 3px 0 2px; }
+  table.tax td, table.tax th { font-size: 14px; }
+  .verdicts .card h3 { margin-top: 0; }
+  blockquote { margin: 12px 0; padding: 10px 16px; border-left: 4px solid #94a3b8; background: var(--panel); font-style: italic; max-width: 80ch; }
+  blockquote cite { display: block; font-style: normal; color: var(--muted); font-size: 14px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+<nav class="toc">
+  <a class="home" href="#top">Debiasing trade-offs</a>
+  <a href="#goal">1. Goal and motivation</a>
+  <a href="#biases">2. The biases we track</a>
+  <a href="#setup">3. Setup</a>
+  <a class="sub" href="#panel">Bias panel</a>
+  <a class="sub" href="#protocol">Protocol</a>
+  <a href="#methods">4. Methods studied</a>
+  <a href="#results">5. Results across methods</a>
+  <a class="sub" href="#explorer">Trade-off explorer</a>
+  <a class="sub" href="#audit">Audit matrix</a>
+  <a class="sub" href="#answers">Answers so far</a>
+  <a href="#status">6. Status</a>
+  <a href="#questions">7. Questions for discussion</a>
+  <a href="#glossary">Glossary</a>
+  <div style="margin-top:14px;font-weight:700">Method pages</div>
+  <a href="methods/pda.html">PD / PDA</a>
+  <a href="methods/d2q.html">D2Q (+ VR)</a>
+  <a href="methods/ips-pop.html">IPS-pop</a>
+  <a href="methods/snips.html">SNIPS</a>
+  <a href="methods/macr.html">MACR</a>
+  <a href="methods/ips-feat.html">IPS-feat</a>
+</nav>
+
+<main id="top">
+<h1>What does fixing one bias do to the others?</h1>
+<p class="subtitle">Trade-offs of single-bias debiasing methods on KuaiRand — progress report (6 methods, 54 sweeps, 270 test-evaluated models)</p>
+
+<div class="card callout">
+  <b>How to read this page.</b> Words with a dotted underline are defined in the <a href="#glossary">glossary</a>; hover them to see the definition. Every chart is interactive: hover a point for its numbers. Each method has its own page with an interactive explanation of how it works.
+</div>
+
+<!-- ================================================================== -->
+<section id="goal">
+<h2>1. Goal and motivation</h2>
+
+<p>Recommender systems learn from logs that the previous recommender produced. Those logs carry several <span data-term="bias">biases</span> at the same time: users only react to what they were shown (<span data-term="exposure_bias">exposure bias</span>), popular items dominate (<span data-term="popularity_bias">popularity bias</span>), and for video, watch-time targets depend on video length (<span data-term="duration_bias">duration bias</span>).</p>
+
+<p>Most debiasing methods are built and evaluated for <b>one</b> of these biases. The main survey of the field states this directly:</p>
+<blockquote>“From former studies, we can find that existing methods are usually designed for just addressing one or two specific biases. However, in the real world, various biases usually occur simultaneously. … It is imperative that recommender systems require a general debiasing framework to handle the mixture of biases. … Although challenging, the simple case — the mixture of just two or three biases — is worth to be explored first.”
+  <cite>J. Chen, H. Dong, X. Wang, F. Feng, M. Wang, X. He. <i>Bias and Debias in Recommender System: A Survey and Future Directions.</i> ACM TOIS 41(3), 2023, §5.2 (<a href="https://arxiv.org/abs/2010.03240">arXiv:2010.03240</a>). §4.5 makes the same point: “Most existing methods are designed for addressing one or two biases of a specific scenario.”</cite>
+</blockquote>
+<p>The same group repeats the observation as the motivation for AutoDebias (Chen et al., SIGIR 2021): existing methods “target one or two specific biases” and need hand-set configurations.</p>
+
+<div class="card finding">
+  <b>Research goal.</b> Before building a method that handles several biases, we need to know what the single-bias methods already do to the biases they do <i>not</i> target. We measure these <span data-term="off_target">off-target effects</span> for each method, trace how they change with the method's main hyperparameter, and try to explain them from the method's mechanism.
+</div>
+
+<h3>Research questions</h3>
+<ul>
+  <li><b>RQ1 — Own bias.</b> Measured on randomly exposed data, how much does each method reduce the bias it targets?</li>
+  <li><b>RQ2 — Other biases.</b> How does each method change the biases it does not target?</li>
+  <li><b>RQ3 — <span data-term="coupling">Coupling</span>.</b> Are duration and popularity linked in KuaiRand, so that fixing one moves the other?</li>
+  <li><b>RQ4 — Frontier.</b> Which methods and settings lie on the <span data-term="pareto">Pareto frontier</span> of accuracy against the bias metrics, and which are dominated?</li>
+</ul>
+<h3>Hypotheses (stated before the experiments)</h3>
+<ul>
+  <li><b>H1.</b> Duration correction (D2Q) moves recommendations toward short videos, and through the coupling also shifts popularity.</li>
+  <li><b>H2.</b> Exposure correction (IPS) raises long-tail coverage, but also raises variance across seeds and lowers precision on tail items.</li>
+  <li><b>H3.</b> Popularity debiasing narrows the gap between items but widens the gap between users, with mainstream users losing accuracy.</li>
+</ul>
+</section>
+
+<!-- ================================================================== -->
+<section id="biases">
+<h2>2. The biases we track, and how big they are in the data</h2>
+<div class="grid3">
+  <div class="card"><span class="pill pop">popularity</span><p><span data-term="head">Head items</span> (top 20% by training exposures) receive <b id="f-head"></b> of all training exposures. Naive MF's top-10 lists are 95% head items (<span data-term="aplt">APLT@10</span> = 0.048).</p></div>
+  <div class="card"><span class="pill dur">duration</span><p>The pool's median video is <b id="f-dur"></b>. Items clicked in the random log average 103 s, but <span data-term="naive_mf">Naive MF</span> recommends 78.5 s on average, and the watch-time baseline <span data-term="vr">VR</span> recommends 184.5 s.</p></div>
+  <div class="card"><span class="pill exp">exposure</span><p>Training positives are far more common than in random exposure: the click rate is 47% in the <span data-term="standard_log">standard log</span> but 18% in the <span data-term="random_log">random-exposure log</span>. Naive MF's lists cover only 2.5% of the 7,344 items (<span data-term="coverage">coverage@10</span>).</p></div>
+</div>
+
+<h3>Is duration linked to popularity? (RQ3, data only)</h3>
+<div class="grid2">
+  <div class="chart-box"><div class="chart-h">Median duration by popularity group (5 equal-size groups by training exposures)</div><div id="coupling"></div>
+    <p class="cap">Hover a bar. The most popular group is about 11 s shorter than the least popular.</p></div>
+  <div>
+    <p>Over the whole pool the link is weak: Spearman ρ(popularity, duration) = <b id="f-rho"></b>. It is concentrated at the very top: the 200 most-exposed items have a median of <b id="f-top200"></b> against <b id="f-pool"></b> for the pool.</p>
+    <p>So a method that pushes lists into the head should also make them shorter. A method that pushes lists into the tail does not, by itself, make them longer, because the lower four groups have similar durations. Section 5 tests both directions.</p>
+    <p class="rb-note">Computed from <code>items.parquet</code> of the guarded split, which counts training exposures only. The full 5 × 5 popularity × duration grid analysis from the methodology (§3) is not done yet.</p>
+  </div>
+</div>
+</section>
+
+<!-- ================================================================== -->
+<section id="setup">
+<h2>3. Setup</h2>
+<div class="flow">
+  <div class="box train"><b>Training data</b><span data-term="standard_log">Standard log</span>, 8–21 April (<span data-term="guarded">guarded split</span>): 1.12 M <span data-term="exposure">exposures</span>, 26,172 users, 7,344 items.</div>
+  <div class="arrow">→</div>
+  <div class="box"><b>Model</b>One shared <span data-term="mf">MF</span> <span data-term="backbone">backbone</span> (64-dim). Trained on <span data-term="click">click</span> with <span data-term="bce">BCE</span>. D2Q and VR train on <span data-term="raw_watch_time">raw watch time</span>.</div>
+  <div class="arrow">→</div>
+  <div class="box"><b>Output</b>A score for each user and item. A <span data-term="topk">top-10 list</span> over all 7,344 items for each user.</div>
+  <div class="arrow">→</div>
+  <div class="box eval"><b>Evaluation</b><span data-term="random_log">Random-exposure log</span>, 22 April – 8 May: <span data-term="calibration">calibration</span> 8,186 users (tuning) and <span data-term="test_split">test</span> 19,099 users (reported).</div>
+</div>
+
+<h3 id="panel">Bias panel (what we measure)</h3>
+<p>Every model is scored on the same panel. Accuracy is measured under all five <span data-term="label">labels</span>, whatever the training label, so a method cannot “win” just by changing the target.</p>
+<table class="plain">
+  <thead><tr><th>Dimension</th><th>Metrics</th><th>Reads as</th></tr></thead>
+  <tbody>
+    <tr><td>Accuracy</td><td><span data-term="gauc">GAUC</span>, <span data-term="ndcg">NDCG@10</span> under <span data-term="click">click</span>, <span data-term="long_view">long view</span>, <span data-term="watch_ratio">watch ratio</span>, <span data-term="raw_watch_time">raw watch time</span> (NDCG only), <span data-term="satisfaction">satisfaction</span></td><td>Ranking quality on randomly exposed items</td></tr>
+    <tr><td>Popularity</td><td><span data-term="arp">ARP@10</span>, <span data-term="aplt">APLT@10</span>, <span data-term="gini">Gini@10</span>, <span data-term="rsp">RSP</span>_pop, <span data-term="reo">REO</span>_pop, <span data-term="ckl">C_KL</span>_pop</td><td>How concentrated lists are on popular items</td></tr>
+    <tr><td>Exposure</td><td><span data-term="coverage">Coverage@10</span>, <span data-term="entropy">exposure entropy@10</span></td><td>How many items get recommended at all</td></tr>
+    <tr><td>Duration</td><td><span data-term="list_dur">Mean list duration</span>, <span data-term="w1">W1</span>, RSP_dur, REO_dur, C_KL_dur</td><td>Whether lists match the lengths users actually like</td></tr>
+    <tr><td>Quality</td><td><span data-term="clickbait_share">Clickbait share</span></td><td>Share of <span data-term="clickbait_item">clickbait items</span> in lists</td></tr>
+    <tr><td>Users</td><td><span data-term="ndcg_gap">NDCG gap</span> by activity, <span data-term="mainstream">mainstreaminess</span> and preferred duration</td><td>Whether some user groups lose more than others</td></tr>
+  </tbody>
+</table>
+
+<h3 id="protocol">Protocol (identical for every method)</h3>
+<ul>
+  <li>Each method has one <span data-term="knob">knob</span>, and each knob value is one <span data-term="sweep">sweep</span>: tune lr × weight decay (9 points) on calibration, then train 5 seeds and evaluate each on test exactly once. Every knob value is reported, so each method gives a curve, not a single point.</li>
+  <li><span data-term="delta">Δ</span> is reported against <span data-term="naive_mf">Naive MF</span> (click-trained methods) or <span data-term="vr">VR</span> (D2Q). The <span data-term="sig">*</span> marker means the <span data-term="boot_ci">paired bootstrap CI</span> excludes 0. Read it next to the <span data-term="seed_std">seed std</span>, because the CI ignores seed variance.</li>
+  <li>Caveats that apply everywhere: bootstrap CIs of set metrics (coverage, entropy, Gini) are biased; there is no multiple-comparison correction; satisfaction cells rest on about 10% of test users.</li>
+</ul>
+</section>
+
+<!-- ================================================================== -->
+<section id="methods">
+<h2>4. Methods studied</h2>
+<p>All six methods are implemented on the same MF backbone so that only the correction differs. They cover three biases and four mechanisms. All six are model-agnostic in design: they need a user-item score, plus item popularity (PD/PDA, IPS-pop), durations (D2Q), side features (IPS-feat) or user and item embeddings (MACR). In their papers, only MACR was tested on a graph model (LightGCN). None was tested on a sequential or LLM-based recommender. Each method page discusses what would carry over.</p>
+<div class="rb-table-wrap">
+<table class="plain tax">
+  <thead><tr><th>Method</th><th>Paper</th><th>Bias targeted</th><th>Mechanism</th><th>Pipeline stage</th><th><span data-term="recommender_family">Recommender family</span> (paper → ours)</th><th>Knob</th></tr></thead>
+  <tbody id="tax"></tbody>
+</table>
+</div>
+<div class="grid3" id="cards" style="margin-top:16px"></div>
+</section>
+
+<!-- ================================================================== -->
+<section id="results">
+<h2>5. Results across methods</h2>
+
+<h3 id="explorer">5.1 Trade-off explorer</h3>
+<p>Each point is one sweep (seed mean of 5 models). Lines join a method's knob values in order. Choose any two metrics; the ringed points form the Pareto frontier of what is plotted.</p>
+<div class="chart-box">
+  <div class="chart-h">x <span id="ex-x"></span> y <span id="ex-y"></span>
+    <label style="font-weight:400;font-size:14px"><input type="checkbox" id="ex-pareto" checked> Pareto frontier</label>
+    <span style="font-weight:400;font-size:13px;color:var(--muted)">Presets:</span>
+    <button class="preset" data-x="arp@10" data-y="gauc[click]">accuracy vs popularity</button>
+    <button class="preset" data-x="list_duration@10[click].mean" data-y="arp@10">duration vs popularity</button>
+    <button class="preset" data-x="coverage@10" data-y="ndcg@10[click]">coverage vs NDCG</button>
+    <button class="preset" data-x="calibration_kl_dur@10" data-y="gauc[click]">duration calibration vs accuracy</button>
+  </div>
+  <div class="checks" id="ex-m"></div>
+  <div id="explorer-chart"></div>
+  <p class="cap">D2Q and VR train on raw watch time, so their accuracy is not comparable with the click-trained methods on click metrics. Untick them when reading accuracy.</p>
+</div>
+
+<h3 id="audit">5.2 Audit matrix: one setting per method</h3>
+<p>Rows are methods; pick the knob value in each row. Cells show <span data-term="delta">Δ</span> against the method's baseline. Columns of the bias the method targets have a blue outline (the “diagonal”, RQ1); everything else is off-target (RQ2). The default rows use a setting from the middle of each method's grid (for the IPS family, an <span data-term="ess">ESS share</span> of about 0.5).</p>
+<div id="audit-table"></div>
+
+<h3 id="answers">5.3 Answers so far</h3>
+<div class="grid2 verdicts">
+  <div class="card">
+    <h3>RQ1 — Own bias: <span class="verdict yes">mostly yes</span></h3>
+    <ul>
+      <li><b>IPS-pop / SNIPS</b> give the largest popularity reduction: ARP 1,998 → 509 (clip 10) → 133 (no clip), with a small GAUC gain (+0.0012 to +0.0018).</li>
+      <li><b>PD</b> lowers ARP (to 559 at γ = 0.2), but GAUC click falls with it (by up to 0.023).</li>
+      <li><b>MACR</b> lowers ARP only moderately (to 880 at c = 100). Likely cause: its learned item term σ(ŷ_i) is almost constant (0.98–1.00 in a calibration check on one model), so subtracting it barely reorders items.</li>
+      <li><b>D2Q</b> removes VR's long-video preference: 184.5 s → 66–78 s.</li>
+      <li><b>PDA</b> raises popularity on purpose, because it re-injects recent popularity. It is the most accurate method on every label.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>RQ2 — Other biases: <span class="verdict yes">every method has off-target effects</span></h3>
+    <ul>
+      <li><b>IPS-pop</b>: duration fairness gets worse (RSP_dur, C_KL_dur up), and clickbait share rises from 0.066 to 0.09–0.11.</li>
+      <li><b>PDA</b>: lists become much shorter (78.5 → 38–55 s) and collapse onto about 30 items (coverage 0.004). Clickbait share drops to about 0.</li>
+      <li><b>D2Q</b>: popularity falls (ARP 2,319 → 513–848), but coverage collapses and NDCG on raw watch time drops by about 0.02.</li>
+      <li><b>IPS-feat</b>: lists get longer (+23.5 s at clip 4000) and closer to users' duration history (C_KL_dur down). It has less clickbait.</li>
+      <li><b>MACR c ≥ 10 and PD</b>: coverage falls and clickbait rises.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>RQ3 — Coupling: <span class="verdict part">yes, but only at the head, and it depends on the mechanism</span></h3>
+    <ul>
+      <li>Moving into the head shortens lists. PDA's lists are the most popular and the shortest. This matches the data: the top 200 items have a median of 67 s against 81 s for the pool.</li>
+      <li>Moving into the tail does not lengthen lists by itself. IPS-pop cuts ARP by up to 93%, but changes the mean duration by at most 7.5 s.</li>
+      <li>IPS-feat does lengthen lists. Its propensity uses duration deciles among its features. So the duration shift comes from <i>what the correction conditions on</i>, not from popularity alone.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>RQ4 — Frontier (GAUC click × ARP, click-trained methods)</h3>
+    <ul>
+      <li>Non-dominated: PDA γ = 0.1–0.2 (most accurate), IPS-pop / SNIPS clip 30–∞ (least popular), and IPS-feat with no clip (in between).</li>
+      <li>Dominated: PD at every γ and MACR at every c. On NDCG × ARP, MACR c = 10–20 and IPS-feat clip 300 reach the frontier, because they lose almost no NDCG.</li>
+      <li>Naive MF is dominated on every pair of axes we checked.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>H1 (duration → short, shifts popularity): <span class="verdict yes">supported</span></h3>
+    <p>D2Q cuts mean list duration by 106–118 s against VR and lowers ARP by 1,471–1,806. The quantile ranking (D2Q-Q) goes further, to 30–43 s.</p>
+  </div>
+  <div class="card">
+    <h3>H2 (IPS: tail coverage ↑, variance ↑): <span class="verdict part">partly</span></h3>
+    <p>Coverage rises only at clip ≥ 100; at clip 10–30 it falls. IPS-pop's seed std is not inflated. IPS-feat's ARP seed std is large (185–367 at clip 300–2000). Tail precision has not been measured directly yet.</p>
+  </div>
+  <div class="card">
+    <h3>H3 (user gap widens, mainstream users lose): <span class="verdict no">not supported so far</span></h3>
+    <p>Under PD and IPS-pop, NDCG falls about equally for mainstream and non-mainstream users. Their gap changes by at most 0.003 and is not significant, except at PD γ = 0.25, where it narrows by 0.014. PDA (γ ≥ 0.05) narrows the activity gap by 0.010–0.024.</p>
+  </div>
+</div>
+</section>
+
+<!-- ================================================================== -->
+<section id="status">
+<h2>6. Status</h2>
+<div class="grid2">
+  <div class="card">
+    <h3 style="margin-top:0">Done</h3>
+    <ul>
+      <li>A frozen, guarded split with a hashed manifest, and a soft guard so the test split is used once.</li>
+      <li>A shared MF backbone, training loop, sweep runner and bias panel with a user-level bootstrap.</li>
+      <li>Six methods plus the VR baseline: 54 sweeps, 270 test-evaluated models. Each method is in its own reviewed PR (#1–#6).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Not done (from the methodology)</h3>
+    <ul>
+      <li>Doubly robust (DR), AutoDebias (a joint, multi-bias reference) and DICE.</li>
+      <li>A second backbone (DeepFM or LightGCN). The side features are already preprocessed.</li>
+      <li>Training on the other labels (watch ratio, long view) for every method: the full label matrix.</li>
+      <li>The 5 × 5 popularity × duration grid, and mass-shift heatmaps showing where each method moves recommendations.</li>
+      <li>Paired tests with Holm correction, the sensitivity run on the full split, and feedback-loop simulation.</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<!-- ================================================================== -->
+<section id="questions">
+<h2>7. Questions for discussion</h2>
+<p>The audit already shows clear trade-offs. The main decision is which direction to take next. Possible directions:</p>
+<div class="optrow">
+  <div class="opt"><h4>A. Explain the coupling (depth)</h4><p>Build the 5 × 5 popularity × duration grid and the mass-shift heatmaps. Then decompose each method's list shift into a popularity part and a duration part. This turns RQ3 from an observation into an explanation, e.g. “a correction moves duration only if its propensity or target depends on duration.”</p></div>
+  <div class="opt"><h4>B. Test multi-bias methods (breadth)</h4><p>Add DR and AutoDebias, and possibly DICE. Ask whether methods designed for several biases avoid the off-target effects we found. This directly answers the survey's open problem.</p></div>
+  <div class="opt"><h4>C. Check robustness</h4><p>Repeat the audit with a second backbone (DeepFM or LightGCN) and with other training labels. This shows whether the trade-offs belong to the method or to the MF + click setup.</p></div>
+  <div class="opt"><h4>D. Propose a correction</h4><p>Use the findings to design a joint popularity + duration correction, e.g. an IPS-style propensity that conditions on both. Then show that it moves the frontier. This makes the project a method paper.</p></div>
+  <div class="opt"><h4>E. Wrap up now</h4><p>Write up the six-method audit as it is: audit matrix, frontiers and RQ verdicts, with limitations. Run the paired tests with Holm correction first.</p></div>
+</div>
+
+<h3>Specific questions</h3>
+<p class="rb-note">Each method page also ends with one or two method-specific open questions in its Discussion section.</p>
+<ol class="questions">
+  <li><b>Contribution.</b> Is a careful measurement study (an audit of off-target effects) a sufficient contribution, or does the project need a new method (direction D)?
+    <div class="why">This decides between A/B/C and D.</div></li>
+  <li><b>Depth or breadth.</b> If audit only: is it better to explain one coupling well (A) or to cover more methods and backbones (B/C)?
+    <div class="why">Our best finding (RQ3: the coupling depends on what the correction conditions on) would benefit most from A.</div></li>
+  <li><b>Is PDA “debiasing”?</b> PDA raises accuracy everywhere by <i>using</i> recent popularity, and makes lists more popular and shorter. Should it be framed as a debiasing method, or as a separate class (“bias exploitation”) in the analysis?
+    <div class="why">This changes how RQ1 is scored for PDA and MACR (c = 0).</div></li>
+  <li><b>Tuning protocol.</b> We select lr / weight decay by calibration GAUC (NDCG for raw watch time). For some knob values the tuned learning rate changes (PD γ = 0.25, PDA, MACR c = 0, IPS clip ≥ 100), which mixes optimisation effects into the curve. Should we fix the backbone hyperparameters across knob values instead?</li>
+  <li><b>What counts as “better”.</b> Several panel metrics have no single good direction (mean duration, C_KL_pop overshooting below the user's history). Should the frontier analysis use distance-to-reference metrics only (W1, C_KL), or report them separately?</li>
+  <li><b>Statistics.</b> Are 5 seeds plus a paired user bootstrap acceptable, or should seed variance enter the test, e.g. a hierarchical bootstrap over seeds and users? Example: SNIPS's apparent halving of the ARP seed std at clip 1000 comes from a single seed and is not significant by an F-test. Holm correction across the panel × 54 sweeps will also remove many small effects.</li>
+  <li><b>Evaluation pool.</b> Top-10 lists are ranked over all 7,344 items, but relevance only exists for the randomly exposed candidates. Is this mixed protocol acceptable, or should list metrics also be computed on candidate sets only?</li>
+  <li><b>Scope and timeline.</b> What is the target: a course report, a workshop paper or a conference paper? This sets how much of the “Not done” list is needed.</li>
+</ol>
+</section>
+
+<!-- ================================================================== -->
+<section id="glossary">
+<h2>Glossary</h2>
+<p>One definition per term, used on every page. Method names follow the table in Section 4.</p>
+<div id="gloss"></div>
+</section>
+
+<footer>
+  Data: KuaiRand-Pure, guarded split. Results come from <code>outputs/sweeps/*/eval/test/b1b6eb50…/aggregate.json</code>; paired bootstrap CIs come from the per-run <code>bootstrap_samples.npy</code> (1,000 user resamples) and are collected in <code>assets/data.js</code>. Code and per-method results: PRs #1–#6 in <a href="https://github.com/xplus2g4/cp4285-recsys/pulls">xplus2g4/cp4285-recsys</a>.
+</footer>
+</main>
+</div>
+
+<script>
+(function () {
+  const F = RB.R.facts;
+  const pct = (x) => (100 * x).toFixed(0) + "%";
+  document.getElementById("f-head").textContent = pct(F.head_share_exposure);
+  document.getElementById("f-dur").textContent = F.median_dur_pool_s.toFixed(0) + " s";
+  document.getElementById("f-rho").textContent = F.rho_pop_dur.toFixed(3);
+  document.getElementById("f-top200").textContent = F.median_dur_top200_s.toFixed(0) + " s";
+  document.getElementById("f-pool").textContent = F.median_dur_pool_s.toFixed(0) + " s";
+
+  // ---- coupling bar chart ----
+  (function () {
+    const host = document.getElementById("coupling");
+    const v = F.median_dur_by_pop_bin_s, W = 520, H = 230, m = { l: 50, r: 10, t: 14, b: 44 };
+    const svg = RB.svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "rb-chart" }, host);
+    const lo = 60, hi = 90, iw = W - m.l - m.r, ih = H - m.t - m.b, bw = iw / v.length;
+    const y = (d) => m.t + ih - ((d - lo) / (hi - lo)) * ih;
+    for (const t of [60, 70, 80, 90]) {
+      RB.svgEl("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: "rb-grid" }, svg);
+      RB.svgEl("text", { x: m.l - 6, y: y(t) + 4, "text-anchor": "end", class: "rb-tick" }, svg).textContent = t + " s";
+    }
+    const names = ["least popular", "2", "3", "4", "most popular"];
+    v.forEach((d, i) => {
+      const r = RB.svgEl("rect", { x: m.l + i * bw + 10, y: y(d), width: bw - 20, height: m.t + ih - y(d), fill: i === 4 ? "#0891b2" : "#94a3b8", class: "rb-pt" }, svg);
+      r.addEventListener("mousemove", (ev) => RB.showTip(`<b>Popularity group ${i + 1}</b> (${names[i]})<br>median duration ${d.toFixed(1)} s<br>1,469 items`, ev));
+      r.addEventListener("mouseleave", RB.hideTip);
+      RB.svgEl("text", { x: m.l + i * bw + bw / 2, y: y(d) - 5, "text-anchor": "middle", class: "rb-tick" }, svg).textContent = d.toFixed(0) + " s";
+      RB.svgEl("text", { x: m.l + i * bw + bw / 2, y: H - 24, "text-anchor": "middle", class: "rb-tick" }, svg).textContent = names[i];
+    });
+    RB.svgEl("text", { x: m.l + iw / 2, y: H - 6, "text-anchor": "middle", class: "rb-label" }, svg).textContent = "popularity group (training exposures)";
+  })();
+
+  // ---- taxonomy ----
+  const TAX = [
+    { keys: ["pd", "pda"], name: "PD / PDA", page: "methods/pda.html", paper: "Zhang et al., SIGIR 2021", bias: ["pop", "popularity (as a confounder)"], mech: "causal adjustment of the score", stage: "training loss + inference score", fam: "MF trained with BPR → MF", knob: "γ ∈ {0.02 … 0.25}, PD and PDA",
+      blurb: "Model popularity's effect on clicks during training, then remove it (PD) or replace it with recent popularity (PDA) when ranking." },
+    { keys: ["d2q", "d2q_q"], name: "D2Q (+ VR)", page: "methods/d2q.html", paper: "Zhan et al., KDD 2022", bias: ["dur", "duration"], mech: "label transformation", stage: "training label + inference score", fam: "feature-based deep network (Kuaishou logs) → MF", knob: "M ∈ {1 … 100}, two rankings",
+      blurb: "Replace watch time by its quantile among videos of similar length, so long videos no longer win by default." },
+    { keys: ["ips_pop"], name: "IPS-pop", page: "methods/ips-pop.html", paper: "Schnabel et al., ICML 2016", bias: ["exp", "exposure (via popularity)"], mech: "loss reweighting", stage: "training loss", fam: "MF on explicit ratings → MF", knob: "clip ∈ {10 … ∞}",
+      blurb: "Weight each training row by 1 ÷ its item's exposure share, so rarely shown items count as much as under random exposure." },
+    { keys: ["snips"], name: "SNIPS", page: "methods/snips.html", paper: "Swaminathan & Joachims, NeurIPS 2015", bias: ["exp", "exposure (variance of IPS)"], mech: "loss reweighting (self-normalised)", stage: "training loss", fam: "linear (CRF-like) policy, not a recommender → MF", knob: "clip ∈ {10 … ∞}",
+      blurb: "IPS, with each batch's weighted loss divided by the sum of its weights to control variance." },
+    { keys: ["macr"], name: "MACR", page: "methods/macr.html", paper: "Wei et al., KDD 2021", bias: ["pop", "popularity (item direct effect)"], mech: "counterfactual inference", stage: "training loss + inference score", fam: "MF, LightGCN → MF", knob: "c ∈ {0 … 100}",
+      blurb: "Learn separate user, item and matching branches, then subtract the item-only effect when ranking." },
+    { keys: ["ips_feat"], name: "IPS-feat", page: "methods/ips-feat.html", paper: "Schnabel et al., ICML 2016 (covariate propensity) + FM", bias: ["exp", "exposure (via features)"], mech: "loss reweighting", stage: "training loss", fam: "MF + logistic-regression propensity → MF + FM propensity", knob: "clip ∈ {10 … 8000, ∞}",
+      blurb: "IPS whose exposure probability is predicted from user and item features instead of popularity counts." },
+  ];
+  document.getElementById("tax").innerHTML = TAX.map((t) => `<tr><td><a href="${t.page}"><b>${t.name}</b></a></td><td>${t.paper}</td><td><span class="pill ${t.bias[0]}">${t.bias[1]}</span></td><td>${t.mech}</td><td>${t.stage}</td><td>${t.fam}</td><td>${t.knob}</td></tr>`).join("");
+  document.getElementById("cards").innerHTML = TAX.map((t) => `<a class="mcard" href="${t.page}"><h3>${t.keys.map((k) => `<span style="color:${RB.color(k)}">●</span>`).join("")} ${t.name}</h3><span class="pill ${t.bias[0]}">${t.bias[1]}</span><span class="pill stage">${t.mech}</span><p>${t.blurb}</p><p style="color:var(--accent)">Mechanism, interactive demo and results →</p></a>`).join("");
+
+  // ---- explorer ----
+  const ALL = ["pd", "pda", "macr", "ips_pop", "snips", "ips_feat", "d2q", "d2q_q"];
+  const on = new Set(["pd", "pda", "macr", "ips_pop", "ips_feat"]);
+  let ex = { x: "arp@10", y: "gauc[click]" };
+  const chart = document.getElementById("explorer-chart");
+  function draw() {
+    const ms = ALL.filter((m) => on.has(m));
+    if (!ms.length) { chart.innerHTML = "<p class='rb-note'>Select at least one method.</p>"; return; }
+    const bases = [...new Set(ms.map((m) => RB.baselineOf(m).method))];
+    RB.scatter(chart, { methods: ms, x: ex.x, y: ex.y, baselines: bases, pareto: document.getElementById("ex-pareto").checked, height: 420, width: 900 });
+  }
+  document.getElementById("ex-m").innerHTML = ALL.map((m) => `<label><input type="checkbox" value="${m}" ${on.has(m) ? "checked" : ""}><i style="background:${RB.color(m)}"></i>${RB.methodName(m)}</label>`).join("");
+  document.getElementById("ex-m").addEventListener("change", (e) => { e.target.checked ? on.add(e.target.value) : on.delete(e.target.value); draw(); });
+  document.getElementById("ex-pareto").addEventListener("change", draw);
+  const keys = Object.keys(RB.METRIC_INFO).filter((k) => !k.includes(".ref_mean"));
+  const sx = RB.metricSelect(document.getElementById("ex-x"), keys, ex.x, (k) => { ex.x = k; draw(); });
+  const sy = RB.metricSelect(document.getElementById("ex-y"), keys, ex.y, (k) => { ex.y = k; draw(); });
+  document.querySelectorAll("button.preset").forEach((b) => b.addEventListener("click", () => { ex = { x: b.dataset.x, y: b.dataset.y }; sx.value = ex.x; sy.value = ex.y; draw(); }));
+  draw();
+
+  // ---- audit matrix ----
+  const ROWS = [
+    { m: "pd", k: 0.1 }, { m: "pda", k: 0.1 }, { m: "macr", k: 40 },
+    { m: "ips_pop", k: 100 }, { m: "snips", k: 100 }, { m: "ips_feat", k: 4000 },
+    { m: "d2q", k: 60 }, { m: "d2q_q", k: 60 },
+  ];
+  const TARGET = { pd: "Popularity", pda: "Popularity", macr: "Popularity", ips_pop: "Exposure", snips: "Exposure", ips_feat: "Exposure", d2q: "Duration", d2q_q: "Duration" };
+  const COLS = [
+    ["Accuracy", ["gauc[click]", "ndcg@10[click]", "gauc[watch_ratio]", "ndcg@10[raw_watch_time]"]],
+    ["Popularity", ["arp@10", "aplt@10", "rsp_pop@10"]],
+    ["Exposure", ["coverage@10", "exposure_entropy@10"]],
+    ["Duration", ["list_duration@10[click].mean", "wasserstein_duration@10[click]", "calibration_kl_dur@10", "rsp_dur@10"]],
+    ["Quality", ["clickbait_share@10"]],
+    ["Users", ["ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|mainstream].gap"]],
+  ];
+  const host = document.getElementById("audit-table");
+  function cellHtml(rec, k, target) {
+    const d = RB.delta(rec, k), s = RB.sig(rec, k), b = RB.info(k).better, ci = RB.dci(rec, k);
+    let cls = "neu";
+    if (!Number.isNaN(d) && b) cls = (b === "up" ? d > 0 : d < 0) ? "good" : "bad";
+    const title = `${RB.info(k).label}: ${RB.fmt(k, RB.val(rec, k))} ± ${RB.fmt(k, RB.std(rec, k))} (seed std)` + (ci ? ` · Δ CI [${RB.fmt(k, ci[0])}, ${RB.fmt(k, ci[1])}]` : "");
+    return `<td class="num ${s ? cls + " sig" : "ns"} ${target ? "target" : ""}" title="${title}">${RB.fmt(k, d, { signed: true })}${s ? "*" : ""}</td>`;
+  }
+  function renderAudit() {
+    const grp = `<tr class="grp"><th></th>${COLS.map(([g, ks]) => `<th colspan="${ks.length}">${g}</th>`).join("")}</tr>`;
+    const SHORT = { "gauc[click]": "GAUC click", "ndcg@10[click]": "NDCG click", "gauc[watch_ratio]": "GAUC w.ratio", "ndcg@10[raw_watch_time]": "NDCG w.time",
+      "arp@10": "ARP", "aplt@10": "APLT", "rsp_pop@10": "RSP_pop", "coverage@10": "Cov.", "exposure_entropy@10": "Entropy",
+      "list_duration@10[click].mean": "Dur. (s)", "wasserstein_duration@10[click]": "W1 (s)", "calibration_kl_dur@10": "C_KL_dur", "rsp_dur@10": "RSP_dur",
+      "clickbait_share@10": "Clickbait", "ndcg_by_group@10[click|activity].gap": "Gap activity", "ndcg_by_group@10[click|mainstream].gap": "Gap mainstr." };
+    const hdr = `<tr><th>Method · setting</th>${COLS.flatMap(([, ks]) => ks.map((k) => `<th title="${RB.info(k).label}">${SHORT[k] || RB.info(k).label}${RB.info(k).better === "up" ? " ↑" : RB.info(k).better === "down" ? " ↓" : ""}</th>`)).join("")}</tr>`;
+    const base = (m) => RB.baselineOf(m);
+    const baseRows = ["naive_mf", "vr"].map((b) => {
+      const r = RB.find(b, null);
+      return `<tr class="base"><th class="rowh"><span class="dot" style="background:${RB.color(b)}"></span>${RB.methodName(b)} <span class="knob">(value)</span></th>${COLS.flatMap(([, ks]) => ks.map((k) => `<td class="num">${RB.fmt(k, RB.val(r, k))}</td>`)).join("")}</tr>`;
+    }).join("");
+    const rows = ROWS.map((row, idx) => {
+      const rec = RB.find(row.m, row.k);
+      const opts = RB.sweeps(row.m).map((s) => `<option value="${s.knob}" ${String(s.knob) === String(row.k) ? "selected" : ""}>${RB.knobLabel(row.m, s.knob)}</option>`).join("");
+      const lr = rec.lr !== base(row.m).lr || rec.wd !== base(row.m).wd ? ` <span class="lrflag" title="tuned lr ${rec.lr}, wd ${rec.wd}">lr≠</span>` : "";
+      return `<tr><th class="rowh"><span class="dot" style="background:${RB.color(row.m)}"></span><a href="${METHODS[row.m].page}">${RB.methodName(row.m)}</a> <select data-i="${idx}">${opts}</select>${lr}${base(row.m).method === "vr" ? ` <span class="knob" style="font-size:11px">vs VR</span>` : ""}</th>${COLS.flatMap(([g, ks]) => ks.map((k) => cellHtml(rec, k, TARGET[row.m] === g))).join("")}</tr>`;
+    }).join("");
+    host.innerHTML = `<div class="rb-table-wrap"><table class="rb-table audit"><thead>${grp}${hdr}</thead><tbody>${baseRows}${rows}</tbody></table></div>
+      <p class="rb-note">Grey rows: baseline values. Other rows: Δ against Naive MF, or against VR where marked “vs VR”. <span class="good sig">green</span> = better, <span class="bad sig">red</span> = worse, <span class="neu sig">blue</span> = no preferred direction; faded = CI of Δ includes 0; * = significant (paired user bootstrap). Hover a cell for the value, seed std and CI. lr≠ = the tuned learning rate or weight decay differs from the baseline's. D2Q rows are relative to VR, which recommends long and popular videos.</p>`;
+    host.querySelectorAll("select").forEach((s) => s.addEventListener("change", () => {
+      const r = ROWS[+s.dataset.i]; r.k = s.value === "inf" ? "inf" : Number(s.value); renderAudit();
+    }));
+  }
+  renderAudit();
+
+  RB.glossaryList(document.getElementById("gloss"));
+})();
+</script>
+</body>
+</html>

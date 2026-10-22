@@ -1,0 +1,487 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>D2Q and D2Q-Q — debiasing trade-offs</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/data.js"></script><script src="../assets/glossary.js"></script><script src="../assets/charts.js"></script>
+<style>
+  .toy-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 1000px) { .toy-grid { grid-template-columns: 1fr; } }
+  .toy-panel { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .toy-panel h4 { margin: 2px 0 6px; }
+  .toy-panel svg { width: 100%; height: auto; display: block; }
+  .toy-ax { stroke: #94a3b8; } .toy-grid-l { stroke: #eef2f7; }
+  .toy-t { font-size: 11.5px; fill: #64748b; } .toy-lab { font-size: 12.5px; fill: #334155; font-weight: 600; }
+  .toy-cut { stroke: #475569; stroke-dasharray: 5 4; stroke-width: 1.4; }
+  table.toy { border-collapse: collapse; font-size: 13.5px; width: 100%; }
+  table.toy th, table.toy td { padding: 3px 7px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  table.toy th:first-child, table.toy td:first-child { text-align: left; }
+  table.toy thead th { background: var(--panel); font-weight: 600; }
+  table.toy tr.sel { background: #fff7ed; }
+  .rank3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+  .rank3 .rk { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: #fff; font-size: 14px; }
+  .rank3 .rk h5 { margin: 0 0 4px; font-size: 14px; }
+  .rank3 ol { margin: 0; padding-left: 20px; }
+  .rank3 .md { margin-top: 4px; font-size: 13px; color: var(--muted); }
+  .rank3 .md b { color: var(--fg); }
+  .lookup { font-size: 14px; background: #fff; border: 1px dashed #cbd5e1; border-radius: 8px; padding: 8px 12px; margin-top: 10px; }
+  .chip { display: inline-block; min-width: 18px; text-align: center; border-radius: 4px; color: #fff; font-weight: 700; font-size: 12px; padding: 0 4px; }
+  .labels-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+  .labels-box .card { margin: 0; font-size: 14.5px; }
+  .labels-box .card p { margin: 4px 0; }
+</style>
+</head><body><div class="page">
+<nav class="toc"><a class="home" href="../index.html">← Overview</a>
+  <a href="#summary">Summary</a><a href="#problem">Problem</a><a href="#mechanism">How it works</a>
+  <a href="#demo">Interactive demo</a><a href="#family">Recommender family</a><a href="#impl">Our implementation</a>
+  <a href="#results">Results</a><a href="#findings">Findings</a><a href="#discussion">Discussion</a><a href="#caveats">Caveats</a></nav>
+<main>
+  <h1>D2Q and D2Q-Q (baseline: VR)</h1>
+  <p class="subtitle">Deconfounding Duration Bias in Watch-time Prediction for Video Recommendation — Zhan et al., KDD 2022</p>
+
+  <section id="summary">
+    <p>
+      <span class="pill dur">Duration bias</span>
+      <span class="pill stage">Mechanism: label transformation</span>
+      <span class="pill stage">Stage: training label + inference score</span>
+      <span class="pill fam">Family: model-agnostic regression (paper: feature-based deep model; here: MF)</span>
+    </p>
+    <p>
+      D2Q targets <span data-term="duration_bias">duration bias</span> in watch-time models.
+      It cuts the training rows into M groups of similar video length and replaces each row's watch time by its
+      <span data-term="ecdf">quantile</span> inside its group.
+      One model learns that quantile. The published D2Q then maps the predicted quantile back to seconds with the item's group, and ranks by those seconds.
+      We also report D2Q-Q, which ranks by the quantile itself.
+      Both train on <span data-term="raw_watch_time">raw watch time</span>, so their baseline is <span data-term="vr">VR</span>, the naive watch-time regression, not Naive MF.
+    </p>
+    <div class="card callout">
+      <b>Headline result.</b>
+      VR fills top-10 lists with long videos (mean <span id="hl-vr-dur"></span>).
+      D2Q with M ≥ 10 brings the lists to <span id="hl-d2q-dur"></span>, and D2Q-Q to <span id="hl-q-dur"></span>.
+      Popularity falls too (<span data-term="arp">ARP@10</span> <span id="hl-arp"></span> for D2Q), but
+      <span data-term="coverage">Coverage@10</span> collapses from <span id="hl-cov-vr"></span> to <span id="hl-cov"></span>:
+      all users get videos from the same few dozen items.
+      <span data-term="ndcg">NDCG@10</span> on raw watch time falls by about 0.02; NDCG@10 on <span data-term="watch_ratio">watch ratio</span> rises.
+      H1 (duration correction moves lists to short videos and shifts popularity) is strongly supported.
+    </div>
+  </section>
+
+  <section id="problem"><h2>The problem it targets</h2>
+    <p>
+      Watch time in seconds grows with video length. A 4-minute video can collect 200 seconds; a 15-second video cannot.
+      A model that regresses watch time therefore learns "long video = high score", whatever the user's interest.
+      The D2Q paper draws this as a causal graph over user U, video V, duration D and watch time W:
+    </p>
+    <ul>
+      <li><b>D → W</b>: longer videos get longer watches. The paper treats this as legitimate and keeps it.</li>
+      <li><b>D → V</b>: duration changes which videos get shown, because a platform that maximises watch time shows long videos more. The paper calls this the bias and removes it. Duration is thus a <span data-term="confounder">confounder</span> of the video–watch-time relation.</li>
+    </ul>
+    <p>
+      <b>KuaiRand example.</b> VR trains <span data-term="mf">MF</span> on raw watch time and ranks by the predicted seconds.
+      Its top-10 lists average <span id="pr-vr-dur"></span>; the median pool video is 81 s.
+      Clicked videos in the <span data-term="random_log">random-exposure log</span> average <span id="pr-ref-click"></span>, and videos watched to the end average <span id="pr-ref-wr"></span>.
+      VR's <span data-term="w1">W1</span> distance to the clicked videos' durations is <span id="pr-vr-w1"></span> (Naive MF: <span id="pr-mf-w1"></span>), and its duration <span data-term="ckl">C_KL</span> is <span id="pr-vr-ckl"></span> (Naive MF: <span id="pr-mf-ckl"></span>).
+      VR also pushes popularity up: ARP@10 <span id="pr-vr-arp"></span> against Naive MF's <span id="pr-mf-arp"></span>.
+    </p>
+    <h3>What "accuracy" means for each label</h3>
+    <p>
+      VR, D2Q and D2Q-Q never see clicks. So a Δ on a click metric compares two click-unaware models.
+      Each <span data-term="label">label</span> rewards a different kind of video, so "accuracy" changes meaning with the label:
+    </p>
+    <div class="labels-box">
+      <div class="card"><b>Raw watch time</b> (NDCG@10 only)<p>Gain = seconds watched, min-max scaled within the user. It has no yes/no relevance, so there is no GAUC. It rewards long videos. It is the training label of VR and D2Q, and the label we select their hyperparameters on.</p></div>
+      <div class="card"><b>Watch ratio</b> (GAUC, NDCG@10)<p>Relevant = played to the end. It rewards short videos, which are easier to finish. Ranking by the within-group quantile (D2Q-Q) is close in spirit to this label.</p></div>
+      <div class="card"><b>Click and long view</b> (GAUC, NDCG@10)<p>Did the user click; did KuaiRand flag a long view. Neither label was used in training here. For reference, Naive MF, trained on clicks, has <span data-term="gauc">GAUC</span> · click <span id="lb-mf-gc"></span>, below VR's <span id="lb-vr-gc"></span>.</p></div>
+    </div>
+    <p>Changing the training label therefore changes which videos count as "correct". A gain on watch ratio and a loss on raw watch time are two views of the same shift to short videos.</p>
+  </section>
+
+  <section id="mechanism"><h2>How it works</h2>
+    <h3>Training</h3>
+    <ol>
+      <li><b>Cut duration groups.</b> Sort the training rows by video duration and cut them into M <span data-term="duration_group">duration groups</span> with equal row counts ("equal-frequency"). Each cut is an actual duration, so rows of one video always share a group.</li>
+      <li><b>Turn watch time into a within-group quantile.</b> In group k, compute the empirical CDF of watch time and replace each row's watch time w by its value:
+        <div class="eq">y<sub>i</sub> = Φ̂<sub>k</sub>(w<sub>i</sub>) = #{ rows j in group k with w<sub>j</sub> ≤ w<sub>i</sub> } ÷ n<sub>k</sub></div>
+        Here k is the group of row i, n<sub>k</sub> is the number of rows in group k, and y<sub>i</sub> ∈ (0, 1]. y = 1 means "the longest watch among videos of this length"; y near 0 means "skipped early, compared with videos of the same length".</li>
+      <li><b>Fit one model on all groups.</b> One MF predicts the quantile: h(u, i) = σ(f(u, i)), where f is the MF <span data-term="logit">logit</span> (dot product plus biases) and σ the sigmoid. We fit it with soft-target <span data-term="bce">BCE</span> (BCE with a target between 0 and 1 instead of 0/1):
+        <div class="eq">L = − Σ<sub>i</sub> [ y<sub>i</sub> log h(u<sub>i</sub>, v<sub>i</sub>) + (1 − y<sub>i</sub>) log(1 − h(u<sub>i</sub>, v<sub>i</sub>)) ]</div>
+        The paper uses <span data-term="mse">MSE</span>. Both losses have the same minimiser, the expected quantile E[y | u, i].</li>
+    </ol>
+    <h3>Inference</h3>
+    <ol start="4">
+      <li><b>D2Q (published).</b> Find the group k(i) of the candidate item and map the predicted quantile back to seconds with that group's inverse CDF (the watch time at a given quantile of the group):
+        <div class="eq">ŵ(u, i) = Φ̂<sub>k(i)</sub><sup>−1</sup>( h(u, i) ) &nbsp;&nbsp;→ rank by ŵ</div>
+        Long-video groups have larger inverse-CDF values, so the paper keeps the legitimate effect D → W at this step.</li>
+      <li><b>D2Q-Q (our variant).</b> Rank by the quantile itself: s(u, i) = h(u, i). This is a duration-normalised score: "how well will this user watch this video compared with other videos of the same length".</li>
+    </ol>
+    <h3>The baseline: VR</h3>
+    <p>VR is MF trained with MSE on the raw watch time, scaled by its training mean w̄ = 23.6 s (the scale only helps the optimiser):</p>
+    <div class="eq">L<sub>VR</sub> = Σ<sub>i</sub> ( f(u<sub>i</sub>, v<sub>i</sub>) − w<sub>i</sub> ÷ w̄ )² &nbsp;&nbsp;→ rank by f</div>
+    <h3>Why it should remove the bias</h3>
+    <p>
+      The paper uses backdoor adjustment, a causal identity that averages a confounder out with its overall distribution instead of its distribution in the biased data:
+      E[W | do(U, V)] = Σ<sub>d</sub> P(D = d) · E[W | U, V, D = d].
+      Fitting E[W | U, V, D] inside duration groups approximates the inner term. The quantile labels let one model share parameters across all groups.
+    </p>
+    <h3>The knob M</h3>
+    <ul>
+      <li><b>M = 1.</b> One group. The target is the global quantile of watch time: a rank transform, with no duration adjustment. The inverse CDF is monotone, so D2Q and D2Q-Q rank identically. It is still not VR: the target is a rank, not seconds, so a few very long watches pull less.</li>
+      <li><b>Large M.</b> Each group covers a narrow duration band, so the quantile compares a watch only with watches of almost equally long videos. Each group's CDF is estimated from fewer rows. Our training log has 1,117,036 rows, so M = 100 still leaves about 11,000 rows per group. The paper found accuracy rising up to 20–30 groups and falling after.</li>
+    </ul>
+  </section>
+
+  <section id="demo"><h2>Interactive demo</h2>
+    <div class="widget">
+      <h3>Toy example: 6 videos, 18 training rows (made-up numbers)</h3>
+      <div class="controls">
+        <label>M (duration groups): <input type="range" id="toy-m" min="0" max="3" step="1" value="2"> <span class="readout" id="toy-m-out"></span></label>
+        <span>Inspect item: <span id="toy-items"></span></span>
+      </div>
+      <div class="toy-grid">
+        <div class="toy-panel"><h4>Training rows: duration vs watch time</h4><div id="toy-scatter"></div>
+          <div class="rb-note">Colour = duration group; dashed lines = group cuts. For the inspected item: grey diamond = VR prediction, orange diamond = D2Q prediction.</div></div>
+        <div class="toy-panel"><h4>Training targets: within-group quantile y</h4><div id="toy-strip"></div>
+          <div class="rb-note">One line per group. Each dot is a row, placed at its target y = Φ̂<sub>k</sub>(w) and labelled with its item.</div></div>
+      </div>
+      <div class="toy-panel" style="margin-top:12px">
+        <h4>Ranking one user's candidates</h4>
+        <div id="toy-table"></div>
+        <div class="rank3" id="toy-ranks"></div>
+        <div class="lookup" id="toy-lookup"></div>
+      </div>
+      <p class="rb-note" style="margin-top:8px">Toy model: for every user it predicts an item's average training target. VR predicts the item's mean watch time; D2Q and D2Q-Q predict the item's mean quantile h. This is what MF's item bias learns; the real MF adds a user-specific part. Groups follow our implementation's cut rule.</p>
+    </div>
+    <p><b>What to look at.</b>
+      At M = 1 there is one group, so D2Q and D2Q-Q give the same order. That order already differs from VR: item F wins VR only through one 165 s watch, and averaging quantiles instead of seconds weakens that single outlier.
+      With M ≥ 2, each row is compared only with rows of similar length. At M = 2, item C, a 45 s video that users mostly finish, wins its group and moves to first place in D2Q-Q. At M = 3, item A, a 10 s clip that users finish and replay, gets the top quantiles of its group; D2Q-Q puts it first, and its top-3 mean duration drops from 145 s to 68 s.
+      D2Q maps each h back to seconds through the item's own group (use "Inspect item"). Long groups map to larger seconds, so D2Q keeps long videos near the top.
+      At M = 6 every item is its own group. The quantile then only depends on how many rows an item has, so D2Q-Q ties, and D2Q falls back to each item's own watch times.
+      The real data never reach this extreme: even M = 100 leaves about 11,000 rows per group.
+    </p>
+  </section>
+
+  <section id="family"><h2>Recommender family</h2>
+    <ol>
+      <li><b>In the paper.</b> Kuaishou production logs (about 1.2 billion training rows), not KuaiRand. The model is a feature-based deep network: an embedding layer for ID and categorical features (user id, video id, category) plus dense features, including duration, feeding a shared MLP with a sigmoid output. Res-D2Q adds a residual MLP on duration in the last layer. Baselines are VR and weighted logistic regression. The metrics are MAE and XAUC (the share of test pairs whose predicted watch times are in the true order), not list-level bias metrics.</li>
+      <li><b>Model-agnostic?</b> Yes. The paper states that "one can apply any off-the-shelf regression model" for h. D2Q needs: the duration of every training row and every candidate item; a model that outputs a score in [0, 1] and trains on a graded target; and the stored inverse CDF of each group. Later KuaiRand studies (D2Co, CWM) used D2Q with 60 groups as a label on FM, DeepFM, AutoInt and DCN.</li>
+      <li><b>What we used.</b> The shared 64-dimensional MF <span data-term="backbone">backbone</span>, a <span data-term="cf">collaborative-filtering</span> model. MF has no duration input. The item id already fixes the item's group, so the item bias can absorb group-level differences.</li>
+      <li><b>Other families (reasoning, not evidence).</b> D2Q only changes the training target and adds a lookup at inference. Any pointwise model with a regression head can use it: graph CF such as LightGCN trained pointwise, or a sequential model such as SASRec with a [0, 1] head. Models trained with pairwise BPR on implicit feedback would need a graded-target variant. An LLM-based recommender would need a scoring head that outputs h.</li>
+    </ol>
+  </section>
+
+  <section id="impl"><h2>Our implementation</h2>
+    <h3>Knob grid</h3>
+    <p>M ∈ {1, 10, 20, 30, 60, 100}. This is the paper's grid {1, 10, 20, 30, 50, 100} with 50 replaced by 60, the setting D2Co and CWM used on KuaiRand-Pure. Each M is run twice: with D2Q ranking and with D2Q-Q ranking. That is 12 <span data-term="sweep">sweeps</span> plus VR, 65 final runs, and each final run was evaluated on the <span data-term="test_split">test split</span> exactly once.</p>
+    <h3>Departures from the paper</h3>
+    <ul>
+      <li><b>Backbone:</b> MF instead of a feature-based deep network, and no duration input feature. The item id identifies the group. Res-D2Q is not implemented.</li>
+      <li><b>Loss:</b> soft-target BCE instead of MSE, the pipeline's convention for targets in [0, 1]. It has the same minimiser.</li>
+      <li><b>Inverse CDF:</b> each group's quantiles are stored at 1,001 levels and interpolated linearly. Items outside the training duration range take the first or last group.</li>
+      <li><b>D2Q-Q is our addition.</b> The paper only ranks by Φ̂<sup>−1</sup>(h). We report the quantile ranking because it is the duration-normalised label our methodology asks for.</li>
+      <li><b>Selection:</b> raw watch time has no yes/no relevance, so GAUC cannot be computed. VR, D2Q and D2Q-Q select lr × weight decay on <span data-term="calibration">calibration</span> NDCG@10 of raw watch time. All click-trained methods select on GAUC.</li>
+      <li><b>Baseline:</b> VR (MF + MSE on watch time ÷ 23.6 s), the paper's own naive baseline. Δ values on this page are against VR.</li>
+    </ul>
+    <h3>Diagnostics and tuned hyperparameters</h3>
+    <p>We logged <code>d2q_groups</code>, the number of groups actually formed. It equals M in every run: no durations tied at a cut. The table shows the tuned lr / weight decay per sweep.</p>
+    <div id="lr-table"></div>
+    <div class="card warn">The tuned lr / wd changes between M = 1 and M ≥ 10. M = 1 keeps VR's lr 0.001 / wd 1e-6; most M ≥ 10 sweeps pick lr 0.01 / wd 1e-5. The jump between M = 1 and M = 10 therefore mixes the effect of the duration groups with an optimisation change.</div>
+  </section>
+
+  <section id="results"><h2>Results</h2>
+    <div class="grid2">
+      <div class="chart-box"><div class="chart-h">Bias metrics vs M <span id="sel-bias"></span></div><div id="ch-bias"></div>
+        <p class="cap">Start with mean list duration: both variants fall far below VR's dashed line from M = 10 on. Switch to Coverage@10 to see the collapse, and to ARP@10 for popularity.</p></div>
+      <div class="chart-box"><div class="chart-h">Accuracy vs M <span id="sel-acc"></span></div><div id="ch-acc"></div>
+        <p class="cap">NDCG@10 on raw watch time stays below VR at every M. Switch to watch ratio: D2Q-Q jumps above VR from M = 10 on.</p></div>
+    </div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="chart-box"><div class="chart-h">Duration vs popularity (RQ3)</div><div id="sc-coupling"></div>
+        <p class="cap">Moving left (shorter lists) also moves down (less popular items). The path is not monotone in M.</p></div>
+      <div class="chart-box"><div class="chart-h">Raw watch time vs watch ratio (RQ4)</div><div id="sc-labels"></div>
+        <p class="cap">Each label prefers a different model. VR wins on raw watch time; D2Q-Q (M ≥ 10) wins on watch ratio; M = 1 sits below VR on both.</p></div>
+    </div>
+    <h3>Delta table (Δ vs VR)</h3>
+    <div id="dtable"></div>
+    <p class="cap rb-note">Read across a row: accuracy (first four columns), popularity and exposure (ARP, APLT, coverage), duration (list duration, W1, C_KL_dur), clickbait and the user gap.</p>
+    <h3>VR against Naive MF</h3>
+    <p>VR is itself a biased baseline. The table compares it with Naive MF, trained on clicks (Δ = VR − Naive MF).</p>
+    <div id="vr-table"></div>
+  </section>
+
+  <section id="findings"><h2>Findings</h2>
+    <ul style="list-style:none;padding-left:0">
+      <li class="card finding"><b>Targeted bias: lists move to short videos.</b> Mean list duration falls from <span class="f" data-r="vr" data-k="list_duration@10[click].mean"></span> s (VR) to 66–78 s for D2Q with M ≥ 10, and to 30–43 s for D2Q-Q. D2Q-Q lists are shorter than the videos users finish in the random log (43.2 s). W1 to the clicked videos falls from 89.6 s to 47–51 s (D2Q) and 60–72 s (D2Q-Q, which overshoots below the click durations). All Δ significant; seed std 0.4–3.8 s.</li>
+      <li class="card finding"><b>Off-target, popularity: ARP falls, coverage collapses.</b> ARP@10 drops from 2,319 to 513–848 (D2Q, M ≥ 10) and 356–909 (D2Q-Q). Yet Coverage@10 drops from 0.040 to 0.004–0.008 (D2Q) and 0.003–0.004 (D2Q-Q): about 20–57 distinct items across all 19,099 users' lists, against about 295 for VR. <span data-term="entropy">Exposure entropy</span> falls by 0.06–0.12. APLT moves little: D2Q M = 10 is 0.013 against VR's 0.014 (not significant), and D2Q-Q M = 10 is 0.000.</li>
+      <li class="card finding"><b>Targeted bias, knob: M = 1 vs M ≥ 10 is the main jump.</b> M = 1 (no duration adjustment, only the rank transform) is the least extreme setting: lists of 138.7 ± 3.6 s, coverage 0.087 (up from VR's 0.040) and better duration calibration (C_KL_dur 1.45 against 1.91). From M = 10 to 100 most metrics plateau. This jump coincides with a change of tuned lr / wd.</li>
+      <li class="card finding"><b>Off-target, accuracy: the result depends on the label.</b> Against VR, D2Q (M ≥ 10) loses NDCG@10 on raw watch time by 0.019–0.023 (seed std 0.0002–0.0006) and gains on watch ratio by 0.013–0.018. D2Q-Q loses 0.024–0.027 on raw watch time and gains 0.066–0.071 on watch ratio; its GAUC · watch ratio reaches 0.583–0.587, against 0.511 for VR and 0.550 for Naive MF. All these Δ are significant. On click, both lose about 0.017–0.021 GAUC, a comparison between click-unaware models.</li>
+      <li class="card finding"><b>Off-target, calibration and clickbait.</b> D2Q with M ≥ 10 worsens duration calibration: C_KL_dur 2.0–2.5 against 1.91. Its <span data-term="clickbait_share">clickbait share</span> drops to about 0 (≤ 0.0003) from VR's 0.087, because the short videos it picks are not flagged. D2Q-Q is less clean: clickbait share is 0.075 ± 0.040 at M = 30 and 0.063 ± 0.042 at M = 100, with large seed std.</li>
+      <li class="card finding"><b>Off-target, users.</b> The <span data-term="ndcg_gap">NDCG gap</span> across <span data-term="mainstream">mainstreaminess</span> groups rises for D2Q-Q at M = 10 and 20 (0.020 against VR's 0.012, Δ +0.008, significant; seed std ≤ 0.001). For D2Q it rises by 0.003–0.005, not significant. For reference, Naive MF's gap is 0.023.</li>
+    </ul>
+  </section>
+
+  <section id="discussion"><h2>Discussion</h2>
+    <p>
+      <b>Mechanism → result.</b> D2Q-Q ranks by "how well this video is watched compared with videos of the same length". Likely because (interpretation) in short-duration groups the top quantiles go to finished and replayed clips, D2Q-Q behaves like a watch-ratio model. This would explain its large gain on watch-ratio labels and its lists of 30–43 s.
+      D2Q maps the quantile back to seconds, which in principle restores the long-video advantage. Our data show it does so only partly: lists of 66–78 s, far below VR's 184.5 s.
+      Likely because (interpretation, not tested) the MF's predicted quantiles sit near the middle of the range, and the middle of each group's watch-time distribution varies much less with duration than its mean. VR fits means, which long videos inflate through a few very long watches; the M = 1 rank transform alone, with the same tuned lr / wd as VR, already cuts lists from 184.5 s to 138.7 s.
+    </p>
+    <p>
+      <b>The trade-off.</b> D2Q exposes a duration ↔ concentration trade-off. Correcting duration bias moves lists to short videos and lowers ARP, but all users get the same few dozen short items. Coverage drops by 81–93% and duration calibration (C_KL_dur) gets worse for D2Q. Accuracy moves with the label: what VR counts as relevant (long watches) and what watch ratio counts as relevant (finished short videos) pull in opposite directions.
+    </p>
+    <p>
+      <b>Research questions.</b>
+      <b>RQ1</b>: yes for the mean list duration and W1; D2Q-Q overshoots the click positives' durations. Duration calibration improves only at M = 1 (and D2Q-Q M = 10, 60, 100).
+      <b>RQ2</b>: popularity (ARP) falls, but exposure concentrates (coverage, entropy); clickbait falls for D2Q; the mainstream user gap widens slightly for D2Q-Q.
+      <b>RQ3</b>: the coupling is real but not monotone in M (ARP 513–848 for D2Q with no order in M). It also runs against the global pattern: KuaiRand's most popular items are shorter than average (median 67 s for the top 200), yet shorter lists here are <i>less</i> popular. The picked short items are mostly head items (APLT ≤ 0.22), but not the most exposed ones.
+      <b>RQ4</b>: on (NDCG raw watch time, NDCG watch ratio) the frontier holds VR, D2Q M = 20 and 100, and D2Q-Q M = 20–100. M = 1 is dominated by VR on both.
+      <b>H1</b> is strongly supported: duration correction moves lists to short videos and shifts popularity.
+    </p>
+    <p>
+      <b>Open questions.</b> (1) Why does the published D2Q, which maps back to seconds, still cut mean list duration by about 107–118 s? Plotting each group's median and mean watch time from the stored inverse CDFs would test the explanation above. (2) Is the coverage collapse a property of the quantile label or of MF's item bias absorbing each item's mean quantile? Rerunning one M with a different backbone or without item biases would separate the two.
+    </p>
+  </section>
+
+  <section id="caveats"><h2>Caveats</h2>
+    <ul>
+      <li>The bootstrap CIs of set metrics (coverage, entropy, Gini) are biased: resampling users leaves about 63% distinct users. Read them as variability, not coverage intervals.</li>
+      <li>There is no multiple-comparison correction across the panel.</li>
+      <li><span data-term="sig">*</span> covers user sampling, not seed variance. Read it with the <span data-term="seed_std">seed std</span>.</li>
+      <li>Satisfaction cells rest on about 10% of users.</li>
+      <li>Δ is against VR, which is click-unaware and itself strongly biased toward long and popular videos. "Better than VR" on duration or popularity does not mean "better than Naive MF".</li>
+      <li>VR, D2Q and D2Q-Q select hyperparameters on calibration NDCG@10 of raw watch time; the click-trained methods select on GAUC. Cross-page comparisons mix two selection rules.</li>
+      <li>M = 1 uses different tuned lr / wd than most M ≥ 10 sweeps, so the M = 1 → 10 jump is not a pure knob effect.</li>
+      <li>D2Q-Q is our variant, not the paper's method. The paper never measured list-level duration or popularity, so there is no published reference for these effects.</li>
+      <li>Some cells sit at a bound: D2Q-Q M = 10 has RSP_pop = REO_pop = 2.0 (the maximum) and APLT = 0. Clickbait share for D2Q-Q M ≥ 30 has seed std 0.04–0.05.</li>
+    </ul>
+  </section>
+
+  <footer>Data: test split, 19,099 users, 5 seeds per setting. Generated from outputs/sweeps via assets/data.js.</footer>
+</main></div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const f = (rec, key, opts) => RB.fmt(key, RB.val(rec, key), opts);
+  const DUR = "list_duration@10[click].mean";
+  const vr = RB.find("vr", null), mf = RB.find("naive_mf", null);
+  const hi = (m) => RB.sweeps(m).filter((r) => Number(r.knob) >= 10);
+  const range = (recs, key, digits, unit = "") => {
+    const v = recs.map((r) => RB.val(r, key));
+    const lo = Math.min(...v), hi2 = Math.max(...v);
+    const fm = (x) => (digits === 0 ? Math.round(x).toLocaleString("en-US") : x.toFixed(digits));
+    return `${fm(lo)}–${fm(hi2)}${unit}`;
+  };
+
+  // ---------- prose numbers computed from data.js ----------
+  $("hl-vr-dur").textContent = f(vr, DUR) + " s";
+  $("hl-d2q-dur").textContent = range(hi("d2q"), DUR, 0, " s");
+  $("hl-q-dur").textContent = range(hi("d2q_q"), DUR, 0, " s");
+  $("hl-arp").textContent = `${Math.round(RB.val(vr, "arp@10")).toLocaleString("en-US")} → ${range(hi("d2q"), "arp@10", 0)}`;
+  $("hl-cov-vr").textContent = f(vr, "coverage@10");
+  $("hl-cov").textContent = range(hi("d2q").concat(hi("d2q_q")), "coverage@10", 3);
+  $("pr-vr-dur").textContent = f(vr, DUR) + " s";
+  $("pr-ref-click").textContent = f(vr, "list_duration@10[click].ref_mean") + " s";
+  $("pr-ref-wr").textContent = f(vr, "list_duration@10[watch_ratio].ref_mean") + " s";
+  $("pr-vr-w1").textContent = f(vr, "wasserstein_duration@10[click]") + " s";
+  $("pr-mf-w1").textContent = f(mf, "wasserstein_duration@10[click]") + " s";
+  $("pr-vr-ckl").textContent = f(vr, "calibration_kl_dur@10");
+  $("pr-mf-ckl").textContent = f(mf, "calibration_kl_dur@10");
+  $("pr-vr-arp").textContent = Math.round(RB.val(vr, "arp@10")).toLocaleString("en-US");
+  $("pr-mf-arp").textContent = Math.round(RB.val(mf, "arp@10")).toLocaleString("en-US");
+  $("lb-mf-gc").textContent = f(mf, "gauc[click]");
+  $("lb-vr-gc").textContent = f(vr, "gauc[click]");
+  document.querySelectorAll("span.f").forEach((n) => { n.textContent = f(RB.find(n.dataset.r, null), n.dataset.k); });
+
+  // ---------- lr / wd table ----------
+  (function () {
+    const rows = [vr].concat(RB.sweeps("d2q"), RB.sweeps("d2q_q"));
+    const body = rows.map((r) => {
+      const diff = r !== vr && (r.lr !== vr.lr || r.wd !== vr.wd);
+      return `<tr><td>${RB.methodName(r.method)}${r.knob != null ? " · " + RB.knobLabel(r.method, r.knob) : ""}</td><td>${r.lr}</td><td>${r.wd}</td><td>${r.diag && r.diag.d2q_groups != null ? r.diag.d2q_groups : "–"}</td><td>${diff ? "differs from VR" : ""}</td></tr>`;
+    }).join("");
+    $("lr-table").innerHTML = `<div class="rb-table-wrap"><table class="rb-table"><thead><tr><th>Setting</th><th>tuned lr</th><th>tuned wd</th><th>d2q_groups</th><th></th></tr></thead><tbody>${body}</tbody></table></div>`;
+  })();
+
+  // ---------- charts ----------
+  const BIAS = [DUR, "list_duration@10[click].median", "wasserstein_duration@10[click]", "wasserstein_duration@10[watch_ratio]", "calibration_kl_dur@10", "rsp_dur@10",
+    "arp@10", "aplt@10", "gini@10", "rsp_pop@10", "calibration_kl_pop@10", "coverage@10", "exposure_entropy@10", "clickbait_share@10",
+    "ndcg_by_group@10[click|mainstream].gap", "ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|dur_pref].gap"];
+  const ACC = ["ndcg@10[raw_watch_time]", "ndcg@10[watch_ratio]", "gauc[watch_ratio]", "gauc[click]", "ndcg@10[click]", "gauc[long_view]", "ndcg@10[long_view]", "gauc[satisfaction]", "ndcg@10[satisfaction]"];
+  const lineInto = (sel, box, keys, init, tip) => {
+    const inner = $(box);
+    RB.metricSelect($(sel), keys, init, (k) => RB.lineChart(inner, { methods: ["d2q", "d2q_q"], metric: k, height: 340, tipMetrics: tip }));
+  };
+  lineInto("sel-bias", "ch-bias", BIAS, DUR, ["arp@10", "coverage@10"]);
+  lineInto("sel-acc", "ch-acc", ACC, "ndcg@10[raw_watch_time]", ["ndcg@10[watch_ratio]"]);
+  RB.scatter($("sc-coupling"), { methods: ["d2q", "d2q_q"], x: DUR, y: "arp@10", baselines: ["vr", "naive_mf"], height: 340, tipMetrics: ["coverage@10"] });
+  RB.scatter($("sc-labels"), { methods: ["d2q", "d2q_q"], x: "ndcg@10[raw_watch_time]", y: "ndcg@10[watch_ratio]", baselines: ["vr", "naive_mf"], height: 340, tipMetrics: [DUR] });
+  RB.deltaTable($("dtable"), { methods: ["d2q", "d2q_q"], metrics: ["ndcg@10[raw_watch_time]", "ndcg@10[watch_ratio]", "gauc[watch_ratio]", "gauc[click]",
+    "arp@10", "aplt@10", "coverage@10", DUR, "wasserstein_duration@10[click]", "calibration_kl_dur@10", "clickbait_share@10", "ndcg_by_group@10[click|mainstream].gap"] });
+
+  // VR vs Naive MF (VR's stored Δ is against Naive MF)
+  (function () {
+    const keys = ["ndcg@10[raw_watch_time]", "ndcg@10[watch_ratio]", "gauc[click]", "arp@10", "coverage@10", DUR, "wasserstein_duration@10[click]", "calibration_kl_dur@10", "clickbait_share@10"];
+    const body = keys.map((k) => {
+      const d = RB.delta(vr, k), s = RB.sig(vr, k), b = RB.info(k).better;
+      let cls = "neu"; if (b) cls = (b === "up" ? d > 0 : d < 0) ? "good" : "bad";
+      return `<tr><th class="rowh">${RB.info(k).label}</th><td class="num">${f(mf, k)}</td><td class="num">${f(vr, k)}</td><td class="num ${s ? cls + " sig" : "ns"}">${RB.fmt(k, d, { signed: true })}${s ? "*" : ""}</td></tr>`;
+    }).join("");
+    $("vr-table").innerHTML = `<div class="rb-table-wrap"><table class="rb-table"><thead><tr><th>Metric</th><th>Naive MF</th><th>VR</th><th>Δ (VR − Naive MF)</th></tr></thead><tbody>${body}</tbody></table></div>`;
+  })();
+
+  // ---------- toy demo ----------
+  const ITEMS = [
+    { n: "A", d: 10, w: [9, 10, 12] },
+    { n: "B", d: 20, w: [4, 7] },
+    { n: "C", d: 45, w: [40, 44, 31, 13] },
+    { n: "D", d: 75, w: [6, 22, 70] },
+    { n: "E", d: 150, w: [33, 52, 118] },
+    { n: "F", d: 240, w: [18, 26, 165] },
+  ];
+  const MS = [1, 2, 3, 6];
+  const GC = ["#c2410c", "#2563eb", "#16a34a", "#9333ea", "#0891b2", "#b45309"];
+  const ROWS = [];
+  ITEMS.forEach((it, j) => it.w.forEach((w, r) => ROWS.push({ j, r, n: it.n, d: it.d, w })));
+  let sel = "E";
+
+  function compute(M) {
+    // Same cut rule as d2q_tables: cut j = sorted row duration at rank ceil((j/M)(N-1)); equal durations share a group.
+    const ds = ROWS.map((x) => x.d).sort((a, b) => a - b), N = ds.length;
+    let cuts = [];
+    for (let k = 1; k < M; k++) cuts.push(ds[Math.ceil((k / M) * (N - 1))]);
+    cuts = [...new Set(cuts)].filter((c) => c > ds[0]);
+    const grp = (d) => cuts.filter((c) => c <= d).length;
+    const G = cuts.length + 1, sorted = [];
+    for (let k = 0; k < G; k++) sorted.push(ROWS.filter((x) => grp(x.d) === k).map((x) => x.w).sort((a, b) => a - b));
+    const rows = ROWS.map((x) => { const s = sorted[grp(x.d)]; return { ...x, g: grp(x.d), y: s.filter((v) => v <= x.w).length / s.length }; });
+    const inv = (k, q) => { // numpy linear quantile, as the stored inverse CDF
+      const s = sorted[k]; if (s.length === 1) return { v: s[0], p: 0, lo: 0 };
+      const p = q * (s.length - 1), lo = Math.min(Math.floor(p), s.length - 2), fr = p - lo;
+      return { v: s[lo] * (1 - fr) + s[lo + 1] * fr, p, lo };
+    };
+    const items = ITEMS.map((it, j) => {
+      const rr = rows.filter((x) => x.j === j), g = grp(it.d);
+      const h = rr.reduce((a, x) => a + x.y, 0) / rr.length;
+      const vrw = it.w.reduce((a, b) => a + b, 0) / it.w.length;
+      return { ...it, g, h, vr: vrw, d2q: inv(g, h).v, inv: inv(g, h) };
+    });
+    return { G, cuts, sorted, rows, items, grp };
+  }
+
+  // scales
+  const W = 520, H = 300, m = { l: 48, r: 14, t: 14, b: 40 };
+  const xMin = Math.log(7), xMax = Math.log(320);
+  const xs = (d) => m.l + ((Math.log(d) - xMin) / (xMax - xMin)) * (W - m.l - m.r);
+  const yMaxS = Math.sqrt(180);
+  const ys = (w) => m.t + (1 - Math.sqrt(w) / yMaxS) * (H - m.t - m.b);
+  const svg = (w, h) => RB.svgEl("svg", { viewBox: `0 0 ${w} ${h}`, role: "img" });
+
+  function drawScatter(S) {
+    const box = $("toy-scatter"); box.innerHTML = "";
+    const s = svg(W, H); box.appendChild(s);
+    const E = (t, a) => RB.svgEl(t, a, s);
+    // group bands
+    const bounds = [];
+    for (let k = 0; k < S.G; k++) {
+      const ds = ITEMS.filter((it) => S.grp(it.d) === k).map((it) => it.d);
+      bounds.push([Math.min(...ds), Math.max(...ds)]);
+    }
+    const edges = [7];
+    for (let k = 1; k < S.G; k++) edges.push(Math.sqrt(bounds[k - 1][1] * bounds[k][0]));
+    edges.push(320);
+    for (let k = 0; k < S.G; k++) E("rect", { x: xs(edges[k]), y: m.t, width: xs(edges[k + 1]) - xs(edges[k]), height: H - m.t - m.b, fill: GC[k], opacity: 0.07 });
+    for (const t of [0, 10, 25, 50, 100, 150]) {
+      E("line", { x1: m.l, x2: W - m.r, y1: ys(t), y2: ys(t), class: "toy-grid-l" });
+      E("text", { x: m.l - 6, y: ys(t) + 4, "text-anchor": "end", class: "toy-t" }).textContent = t;
+    }
+    for (const t of [10, 20, 50, 100, 200]) {
+      E("line", { x1: xs(t), x2: xs(t), y1: H - m.b, y2: H - m.b + 5, class: "toy-ax" });
+      E("text", { x: xs(t), y: H - m.b + 18, "text-anchor": "middle", class: "toy-t" }).textContent = t;
+    }
+    E("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "toy-ax" });
+    E("line", { x1: m.l, x2: m.l, y1: m.t, y2: H - m.b, class: "toy-ax" });
+    E("text", { x: (m.l + W - m.r) / 2, y: H - 6, "text-anchor": "middle", class: "toy-lab" }).textContent = "video duration (s, log scale)";
+    E("text", { x: 13, y: (m.t + H - m.b) / 2, "text-anchor": "middle", class: "toy-lab", transform: `rotate(-90 13 ${(m.t + H - m.b) / 2})` }).textContent = "watch time (s, √ scale)";
+    for (let k = 1; k < S.G; k++) E("line", { x1: xs(edges[k]), x2: xs(edges[k]), y1: m.t, y2: H - m.b, class: "toy-cut" });
+    // rows
+    for (const x of S.rows) {
+      const n = ITEMS[x.j].w.length, cx = xs(x.d) + (x.r - (n - 1) / 2) * 9;
+      const c = E("circle", { cx, cy: ys(x.w), r: 5, fill: GC[x.g], stroke: "#fff", "stroke-width": 1.3, opacity: x.n === sel ? 1 : 0.8 });
+      c.style.cursor = "pointer";
+      c.addEventListener("mousemove", (ev) => RB.showTip(`<div class="rb-tip-h">Item ${x.n} · row ${x.r + 1}</div>duration ${x.d} s, watch time ${x.w} s<br>group ${x.g + 1}, target y = ${x.y.toFixed(2)}`, ev));
+      c.addEventListener("mouseleave", RB.hideTip);
+    }
+    for (const it of ITEMS) {
+      const top = Math.max(...it.w);
+      E("text", { x: xs(it.d), y: ys(top) - 10, "text-anchor": "middle", class: "toy-lab" }).textContent = it.n;
+    }
+    // predictions of the inspected item
+    const it = S.items.find((q) => q.n === sel);
+    const dia = (cx, cy, fill) => E("path", { d: `M${cx} ${cy - 7}L${cx + 7} ${cy}L${cx} ${cy + 7}L${cx - 7} ${cy}Z`, fill, stroke: "#fff", "stroke-width": 1.2 });
+    const px = xs(it.d) + 22;
+    dia(px, ys(it.vr), "#374151");
+    dia(px + 14, ys(it.d2q), "#f97316");
+  }
+
+  function drawStrip(S) {
+    const box = $("toy-strip"); box.innerHTML = "";
+    const w = 400, rowH = 46, h = 26 + S.G * rowH;
+    const s = svg(w, h); box.appendChild(s);
+    const E = (t, a) => RB.svgEl(t, a, s);
+    const x0 = 64, x1 = w - 16, xq = (q) => x0 + q * (x1 - x0);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      E("line", { x1: xq(t), x2: xq(t), y1: 8, y2: h - 18, class: "toy-grid-l" });
+      E("text", { x: xq(t), y: h - 5, "text-anchor": "middle", class: "toy-t" }).textContent = t;
+    }
+    for (let k = 0; k < S.G; k++) {
+      const y = 22 + k * rowH + 14;
+      const names = [...new Set(S.rows.filter((x) => x.g === k).map((x) => x.n))].join("");
+      E("text", { x: 4, y: y + 4, class: "toy-lab", style: `fill:${GC[k]}` }).textContent = `g${k + 1}: ${names}`;
+      E("line", { x1: xq(0), x2: xq(1), y1: y, y2: y, stroke: GC[k], "stroke-width": 2, opacity: 0.35 });
+      for (const x of S.rows.filter((r) => r.g === k)) {
+        E("circle", { cx: xq(x.y), cy: y, r: 5, fill: GC[k], stroke: "#fff", "stroke-width": 1.2 });
+        E("text", { x: xq(x.y), y: y - 9, "text-anchor": "middle", class: "toy-t", style: x.n === sel ? "fill:#111;font-weight:700" : "fill:#64748b" }).textContent = x.n;
+      }
+    }
+  }
+
+  function ranked(items, key) {
+    const s = [...items].sort((a, b) => b[key] - a[key] || a.n.localeCompare(b.n));
+    const eq = (a, b) => Math.abs(a[key] - b[key]) < 1e-9;
+    const tiedAt3 = s.length > 3 && eq(s[2], s[3]);
+    const lis = s.map((it, i) => {
+      const tie = (i > 0 && eq(it, s[i - 1])) || (i < s.length - 1 && eq(it, s[i + 1]));
+      return `<li><span class="chip" style="background:${GC[it.g]}">${it.n}</span> ${it.d} s${tie ? ' <span class="rb-note">(tie)</span>' : ""}</li>`;
+    }).join("");
+    const md = tiedAt3 ? "undefined (tie at rank 3)" : `<b>${(s.slice(0, 3).reduce((a, it) => a + it.d, 0) / 3).toFixed(0)} s</b>`;
+    return { lis, md };
+  }
+
+  function drawRank(S) {
+    const body = S.items.map((it) => `<tr class="${it.n === sel ? "sel" : ""}"><td><span class="chip" style="background:${GC[it.g]}">${it.n}</span></td><td>${it.d} s</td><td>g${it.g + 1}</td><td>${it.w.join(", ")}</td><td>${it.vr.toFixed(1)} s</td><td>${it.h.toFixed(3)}</td><td>${it.d2q.toFixed(1)} s</td></tr>`).join("");
+    $("toy-table").innerHTML = `<table class="toy"><thead><tr><th>Item</th><th>duration</th><th>group</th><th>training watch times (s)</th><th>VR score: mean watch time</th><th>D2Q-Q score: h</th><th>D2Q score: Φ̂⁻¹(h)</th></tr></thead><tbody>${body}</tbody></table>`;
+    const cols = [["VR", "vr", "#374151"], ["D2Q", "d2q", RB.color("d2q")], ["D2Q-Q", "h", RB.color("d2q_q")]];
+    $("toy-ranks").innerHTML = cols.map(([name, key, col]) => {
+      const r = ranked(S.items, key);
+      return `<div class="rk"><h5 style="color:${col}">${name}</h5><ol>${r.lis}</ol><div class="md">mean duration of top 3: ${r.md}</div></div>`;
+    }).join("");
+    const it = S.items.find((q) => q.n === sel), s = S.sorted[it.g];
+    const iv = it.inv;
+    const step = s.length > 1
+      ? `position h × (n − 1) = ${it.h.toFixed(3)} × ${s.length - 1} = ${iv.p.toFixed(2)}, between ${s[iv.lo]} s and ${s[iv.lo + 1]} s → <b>${it.d2q.toFixed(1)} s</b>`
+      : `only one row → <b>${it.d2q.toFixed(1)} s</b>`;
+    $("toy-lookup").innerHTML = `<b>Inverse-CDF lookup for item ${it.n}</b> (${it.d} s, group g${it.g + 1}). Its rows' targets average h = ${it.h.toFixed(3)}. Group g${it.g + 1} watch times, sorted: [${s.join(", ")}] (n = ${s.length}). ${step}. VR instead predicts the item's mean watch time, ${it.vr.toFixed(1)} s.`;
+  }
+
+  function render() {
+    const M = MS[Number($("toy-m").value)];
+    const S = compute(M);
+    const groups = Array.from({ length: S.G }, (_, k) => `{${ITEMS.filter((it) => S.grp(it.d) === k).map((it) => it.n).join(",")}}`).join(" ");
+    $("toy-m-out").textContent = `M = ${M} → ${groups}`;
+    document.querySelectorAll("#toy-items button").forEach((b) => b.classList.toggle("on", b.dataset.n === sel));
+    drawScatter(S); drawStrip(S); drawRank(S);
+  }
+  $("toy-items").innerHTML = ITEMS.map((it) => `<button data-n="${it.n}">${it.n}</button>`).join(" ");
+  document.querySelectorAll("#toy-items button").forEach((b) => b.addEventListener("click", () => { sel = b.dataset.n; render(); }));
+  $("toy-m").addEventListener("input", render);
+  render();
+})();
+</script>
+</body></html>

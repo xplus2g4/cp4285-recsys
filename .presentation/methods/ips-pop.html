@@ -1,0 +1,375 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IPS-pop — debiasing trade-offs</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/data.js"></script><script src="../assets/glossary.js"></script><script src="../assets/charts.js"></script>
+<style>
+  /* page-local styles for the demo only */
+  .demo-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1000px) { .demo-grid { grid-template-columns: 1fr; } }
+  .demo-stats { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 14px; margin: 0; }
+  .demo-stats dt { color: var(--muted); } .demo-stats dd { margin: 0; font-family: ui-monospace, monospace; font-weight: 700; }
+  .est-row { display: grid; grid-template-columns: 150px 1fr 52px; gap: 8px; align-items: center; font-size: 13.5px; margin: 4px 0; }
+  .est-bar { height: 14px; border-radius: 3px; }
+  .est-track { background: #eef2f7; border-radius: 3px; }
+  table.plain td.num, table.plain th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.plain td.clipped { background: #fef3c7; color: #92400e; font-weight: 600; }
+  .demo-svg text { font-family: inherit; }
+  .presets { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .presets button { padding: 2px 9px; font-size: 13px; }
+  .toy-tag { display: inline-block; font-size: 12px; font-weight: 700; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 4px; padding: 0 6px; margin-left: 6px; vertical-align: 2px; }
+</style>
+</head><body><div class="page">
+<nav class="toc"><a class="home" href="../index.html">← Overview</a>
+  <a href="#summary">Summary</a><a href="#problem">Problem</a><a href="#mechanism">How it works</a>
+  <a href="#demo">Interactive demo</a><a href="#family">Recommender family</a><a href="#impl">Our implementation</a>
+  <a href="#results">Results</a><a href="#findings">Findings</a><a href="#discussion">Discussion</a><a href="#caveats">Caveats</a></nav>
+<main>
+  <h1>IPS-pop</h1><p class="subtitle">Recommendations as Treatments: Debiasing Learning and Evaluation — Schnabel et al., ICML 2016</p>
+
+  <!-- ===================================================================== -->
+  <section id="summary">
+    <p><span class="pill exp">Bias: exposure (measured as popularity)</span><span class="pill stage">Mechanism: loss reweighting</span><span class="pill stage">Stage: training loss</span><span class="pill fam">Family: model-agnostic; paper used MF</span></p>
+    <p>IPS-pop (inverse propensity scoring with a popularity propensity) fights <span data-term="exposure_bias">exposure bias</span>.
+      The training log over-represents the items that the platform's old recommender showed often.
+      IPS-pop gives each training row a weight of 1 ÷ <span data-term="propensity">propensity</span>, where the propensity is the item's number of training <span data-term="exposure">exposures</span> relative to the most-exposed item.
+      The weighted loss then approximates the loss we would get if every item had been shown equally often, which is the condition of the random-exposure test log.
+      The single <span data-term="knob">knob</span> is the <span data-term="clip">clip</span>: a cap on how much larger one weight may be than another.</p>
+    <div class="card callout"><b>Headline result.</b>
+      IPS-pop cuts popularity strongly: <span data-term="arp">ARP@10</span> falls from 1,998 to 509 at clip 10 and to 133 unclipped, and the long-tail share of lists rises from 0.048 to 0.78.
+      The cost is top-of-list accuracy: NDCG@10 on clicks falls by up to 0.0153 (significant), while within-candidate GAUC rises slightly (+0.0012 to +0.0018, significant).
+      Off target, duration fairness gets worse at every clip and the share of clickbait in lists rises from 0.066 to about 0.09–0.11.</div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="problem"><h2>The problem it targets</h2>
+    <p>Every model here trains on KuaiRand's <span data-term="standard_log">standard log</span>.
+      The platform's own recommender chose which videos appear in that log.
+      A user can only click what they were shown, so items the old policy liked collect more rows and more positives.
+      The paper calls such data <i>missing not at random</i> (MNAR): whether a user-item pair is observed depends on the pair itself, not on chance.</p>
+    <p>The skew in our training data is large.
+      The 20% most-exposed items, the <span data-term="head">head items</span>, receive 76% of all training exposures; the other 80%, the <span data-term="tail">long-tail items</span>, share the remaining 24%.
+      The training click rate is 0.47, but on the <span data-term="random_log">random-exposure log</span> it is 0.18, because the old policy showed mostly what users would click anyway.</p>
+    <p>An unweighted loss lets the head's 76% of rows dominate training.
+      <span data-term="naive_mf">Naive MF</span> learns this: its <span data-term="topk">top-10 lists</span> have an <span data-term="arp">ARP@10</span> of 1,998 training exposures per item and an <span data-term="aplt">APLT@10</span> of 0.048, so fewer than 1 in 20 recommended items is a tail item.
+      This is <span data-term="popularity_bias">popularity bias</span> in the output.
+      The random log, which we test on, shows items regardless of popularity.
+      IPS-pop tries to make training look like that log.</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="mechanism"><h2>How it works</h2>
+    <h3>Training</h3>
+    <ol>
+      <li><b>Count exposures.</b> For each item i, n<sub>i</sub> is its number of training exposures (its <span data-term="pop">popularity</span>).</li>
+      <li><b>Popularity propensity.</b> The propensity is the item's exposure count relative to the most-exposed item:
+        <div class="eq">p<sub>i</sub> = n<sub>i</sub> ÷ max<sub>j</sub> n<sub>j</sub></div>
+        p<sub>i</sub> = 1 for the most-exposed item and is small for rarely shown items. It depends on the item only, not on the user.</li>
+      <li><b>Raw weight.</b> The <span data-term="ipw">inverse propensity weight</span> of a row about item i is w̃<sub>i</sub> = 1 ÷ p<sub>i</sub> = max<sub>j</sub> n<sub>j</sub> ÷ n<sub>i</sub>. The smallest raw weight is 1 (the most-exposed item). On our training data the largest is about 9,110.</li>
+      <li><b>Clip and normalise.</b>
+        <div class="eq">w<sub>i</sub> = min(w̃<sub>i</sub>, clip) ÷ mean<sub>rows</sub>[ min(w̃, clip) ]</div>
+        The cap makes clip the largest allowed ratio between any two weights. Dividing by the mean over all training rows gives the weights a mean of 1, so the loss keeps the scale of Naive MF.</li>
+      <li><b>Weighted loss.</b> Each row is a (user u, item i, click y<sub>ui</sub>) triple. f(u, i) is the <span data-term="mf">MF</span> <span data-term="backbone">backbone</span>'s <span data-term="logit">logit</span>:
+        <div class="eq">L<sub>IPS</sub> = (1 ÷ B) · Σ<sub>rows in batch</sub> w<sub>i</sub> · BCE( f(u, i), y<sub>ui</sub> )</div>
+        B is the batch size and <span data-term="bce">BCE</span> is binary cross-entropy. Naive MF is the same formula with every w<sub>i</sub> = 1.</li>
+    </ol>
+    <p><b>Why this targets uniform exposure.</b> Item i appears in n<sub>i</sub> rows. With unclipped weights proportional to 1/n<sub>i</sub>, the total weight of item i is n<sub>i</sub> · (1/n<sub>i</sub>) = 1 for every item.
+      So every item contributes the same total weight to the loss, as if each had been shown equally often.
+      In expectation, the weighted loss equals the loss under uniform item exposure; statisticians call such an estimator <i>unbiased</i>.
+      The correction is only on the item marginal: it does not change which users saw an item.</p>
+    <p><b>The price is variance.</b> A rare item's few rows get very large weights, so a handful of rows can steer training.
+      The paper's tail bound grows as propensities become less uniform.
+      Its Theorem 5.2 shows that over-estimating small propensities can pay off if it cuts variance more than it adds bias; clipping does exactly that.
+      We track the cost with the <span data-term="ess">ESS share</span>:</p>
+    <div class="eq">ESS share = (Σ w)² ÷ ( N · Σ w² )</div>
+    <p>Here N is the number of training rows and the sums run over all rows. With equal weights the ESS share is 1. An ESS share of 0.1 means the weighted data carry about as much information as 10% of the rows would without weights.
+      We also log the <b>clipped share</b> (the share of rows whose raw weight exceeds clip) and the <b>max weight</b> (the largest w after normalisation).</p>
+    <h3>Inference</h3>
+    <ol>
+      <li>Score every pool item with the trained backbone: f(u, i). No weight, propensity or popularity enters at inference.</li>
+      <li>Rank by f(u, i) and take the top 10. All of IPS-pop's effect comes from how training shaped f.</li>
+    </ol>
+    <h3>The knob: clip</h3>
+    <ul>
+      <li><b>clip = 1:</b> every weight is capped at 1, so all weights are equal. This is identical to Naive MF.</li>
+      <li><b>Small clip (10, 30):</b> only the most-exposed items are down-weighted; every item below a tenth (or a thirtieth) of the top item's exposures gets the same maximum weight. At clip 10 that is 69% of all rows.</li>
+      <li><b>clip = ∞:</b> pure IPS. Raw weights range over a ratio of about 9,110; after normalisation the max weight is 153 and the ESS share is 0.105.</li>
+    </ul>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="demo"><h2>Interactive demo</h2>
+    <div class="widget">
+      <h3>Reweighting 10 items by inverse popularity <span class="toy-tag">TOY EXAMPLE · MADE-UP NUMBERS</span></h3>
+      <div class="controls">
+        <label>clip <input type="range" id="clipSlider" min="0" max="31" step="1" value="31"></label>
+        <span>clip = <span class="readout" id="clipOut">∞</span></span>
+        <span class="presets" id="presets"></span>
+      </div>
+      <div class="demo-grid">
+        <div>
+          <svg id="demoSvg" class="demo-svg" viewBox="0 0 640 250" style="width:100%;height:auto;display:block" role="img" aria-label="Share of loss per item before and after weighting"></svg>
+          <div class="rb-legend"><span><i style="background:#94a3b8"></i>share of the loss, unweighted (Naive MF)</span><span><i style="background:#16a34a"></i>share of the loss, IPS-weighted</span></div>
+        </div>
+        <div>
+          <dl class="demo-stats">
+            <dt>ESS share</dt><dd id="dEss"></dd>
+            <dt>max weight (normalised)</dt><dd id="dMax"></dd>
+            <dt>rows clipped</dt><dd id="dClip"></dd>
+            <dt>head share of loss</dt><dd id="dHead"></dd>
+          </dl>
+          <h4>Click-rate estimate</h4>
+          <div id="estBars"></div>
+          <p class="rb-note">"Uniform-exposure truth" = mean click rate if each item were shown equally often. "Logged" = plain mean over the log.</p>
+        </div>
+      </div>
+      <div class="rb-table-wrap" style="margin-top:10px"><table class="plain" id="demoTable"></table></div>
+      <p class="cap" style="margin-top:10px"><b>What to look at.</b>
+        The ten toy items have long-tailed exposure counts: A and B are the "head" and get 76% of the rows, like KuaiRand's head.
+        Grey bars show how much of the training loss each item controls without weights. Green bars show it after IPS weighting.
+        At clip = 1 the two bar sets are identical (Naive MF). As you raise the clip, loss share moves from A and B to the tail; at ∞ every item gets exactly 10%.
+        At the same time the ESS share falls, because a few rare rows now carry large weights; with only 10 items it falls further than on real data (0.105).
+        Yellow cells in the table are weights cut by the clip. The click-rate estimate moves from the logged rate towards the uniform-exposure rate and reaches it only when nothing is clipped: clipping trades this bias for lower variance.</p>
+    </div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="family"><h2>Recommender family</h2>
+    <ol>
+      <li><b>In the paper.</b> Schnabel et al. propose propensity-weighted matrix factorisation for explicit rating prediction (squared or absolute error, trained with L-BFGS, a full-batch quasi-Newton optimiser).
+        They test it on semi-synthetic MovieLens 100K, Yahoo! R3 and the new Coat dataset, against plain MF and the Hernández-Lobato et al. (2014) missing-data models.</li>
+      <li><b>Model-agnostic.</b> The method only multiplies each row's loss by a weight. It needs a per-row loss and a propensity per row. The popularity propensity needs nothing but item exposure counts; no features, timestamps or embeddings.</li>
+      <li><b>What we used.</b> The shared 64-dimensional MF backbone, a <span data-term="cf">collaborative filtering</span> model, trained with BCE on clicks.</li>
+      <li><b>Other families</b> (reasoning, not evidence). Graph CF such as LightGCN, sequential models and fine-tuned LLM recommenders all train on a per-example loss, so the weights carry over directly. What does not carry over automatically is the propensity: in a sequential or LLM setting, the chance that an item was shown may depend strongly on the context, and an item-only popularity propensity would ignore that. See the IPS-feat page for a user- and item-feature propensity.</li>
+    </ol>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="impl"><h2>Our implementation</h2>
+    <p><b>Knob grid.</b> clip ∈ {10, 30, 100, 300, 1000, ∞}. Each value is its own <span data-term="sweep">sweep</span>: tune lr × weight decay on 9 grid points using the <span data-term="calibration">calibration split</span>, then train 5 seeds and evaluate each once on the <span data-term="test_split">test split</span>.
+      Training uses the <span data-term="guarded">guarded split</span>. A clip of 3 would already clip 91% of rows and be almost Naive MF, so the grid starts at 10.</p>
+    <h3>Departures from the paper</h3>
+    <ul>
+      <li><b>Label and loss.</b> The paper predicts 1–5 ratings with squared or absolute error. We predict clicks with BCE, the same as every other click-trained method here.</li>
+      <li><b>Propensity.</b> The paper estimates a per-(user, item) observation probability, either with Naive Bayes on the rating value (which needs a small random sample) or with logistic regression on user and item features.
+        We use an item-only popularity propensity from training exposure counts. This targets the bias we study (the old policy's item exposure), and with exposure counts and exponent 1 the weight is the exact ratio between uniform and logged item frequency. It also keeps the random log for selection and testing only. The feature-based variant is IPS-feat.</li>
+      <li><b>No smoothing.</b> Some methods take a square root of click-count propensities. We do not; clipping is the only variance control.</li>
+      <li><b>Clipping.</b> The paper does not clip. It names clipping as future work and its Theorem 5.2 justifies it. We sweep clip as the knob.</li>
+      <li><b>Normaliser.</b> The paper divides the weighted sum by the number of all user-item pairs. We divide the weights by their training mean and average over the batch. This only rescales the loss by a constant. Dividing by the batch's sum of weights instead (<span data-term="self_norm">self-normalisation</span>) is SNIPS, which has its own page.</li>
+      <li><b>Optimiser and selection.</b> The paper uses L-BFGS and picks hyperparameters by cross-validation on the biased data with the IPS estimator. We use the shared protocol: Adam, mini-batches of 8,192, early stopping and selection on calibration GAUC.</li>
+    </ul>
+    <h3>Diagnostics and tuned hyperparameters</h3>
+    <p>Logged once per run; values are seed means. ESS share falls from 0.908 at clip 10 to 0.105 unclipped.
+      The tuned learning rate drops from 1e-2 to 1e-3 from clip 100 upwards (flagged <b>lr≠</b> in the results table). Those rows mix the reweighting effect with an optimisation change.</p>
+    <div id="diagTable"></div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="results"><h2>Results</h2>
+    <p>All numbers are on the test split. Dots are seed means; bars are ± <span data-term="seed_std">seed std</span>; a filled dot means the <span data-term="boot_ci">paired bootstrap CI</span> of <span data-term="delta">Δ</span> against Naive MF excludes 0 (<span data-term="sig">significant</span>). The dashed line is Naive MF.</p>
+    <div class="grid2">
+      <div class="chart-box" id="lcPop"><div class="chart-h">Targeted: popularity and exposure</div><div class="inner"></div>
+        <p class="cap">Start with ARP@10, then switch to Coverage@10: ARP falls at every clip, but coverage first falls (clip 10–30) and only rises from clip 100.</p></div>
+      <div class="chart-box" id="lcOff"><div class="chart-h">Accuracy and off-target metrics</div><div class="inner"></div>
+        <p class="cap">NDCG@10 · click falls steadily as clip grows; switch to GAUC · click (small gain at every clip) and to RSP_dur or C_KL_pop for the off-target costs.</p></div>
+    </div>
+    <div style="display:grid;gap:16px;margin-top:16px">
+      <div class="chart-box" id="scMain"><div class="chart-h">Trade-off: popularity vs top-10 accuracy <span class="widget" style="margin:0;padding:0;border:0;background:none"><button id="scToggle">show other click-trained methods</button></span></div><div class="inner"></div>
+        <p class="cap">Each step up in clip buys lower ARP for lower NDCG@10. Clip 100 sits just below clip 30 at the same ARP, so clip 30 dominates it on these two axes. Use the button to compare with other methods.</p></div>
+      <div class="chart-box" id="scDur"><div class="chart-h">Off-target: popularity fairness vs duration fairness</div><div class="inner"></div>
+        <p class="cap">Lower is better on both axes. Compared with Naive MF, every IPS-pop setting moves left on RSP_pop (better) but up on RSP_dur (worse).</p></div>
+    </div>
+    <h3>All settings, curated metrics</h3>
+    <div id="dTable"></div>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="findings"><h2>Findings</h2>
+    <ul>
+      <li><b>Targeted: popularity falls a lot (RQ1).</b> ARP@10 drops from 1,998 to 509 at clip 10 and to 133 unclipped. APLT@10 rises from 0.048 to 0.12, and up to 0.78 unclipped. <span data-term="rsp">RSP_pop</span> falls from 1.88 to 0.66 and <span data-term="reo">REO_pop</span> from 1.93 to 0.79. All Δ are significant.</li>
+      <li><b>Targeted: coverage is non-monotone in clip.</b> <span data-term="coverage">Coverage@10</span> falls from 0.025 (about 180 items) to 0.014 at clip 10 and 0.011 at clip 30 (about 80 items). From clip 100 it rises, to 0.147 unclipped (about 1,080 items). <span data-term="entropy">Exposure entropy@10</span> stays below Naive MF at every clip (0.42 → 0.29–0.37), and <span data-term="gini">Gini@10</span> rises at clip 10–100 (0.996 → 0.998) and is about unchanged from clip 300.</li>
+      <li><b>Accuracy: GAUC up, NDCG@10 down.</b> <span data-term="gauc">GAUC</span> on clicks gains +0.0012 to +0.0018 at every clip (significant; seed std ≤ 0.0004, Naive MF 0.0002). <span data-term="ndcg">NDCG@10</span> on clicks falls from −0.0012 at clip 10 to −0.0153 unclipped (significant; seed std ≤ 0.0008, Naive MF 0.0009).</li>
+      <li><b>Off-target: duration fairness gets worse at every clip.</b> RSP_dur rises from 0.52 to 0.77–0.88, REO_dur from 0.48 to 0.64–0.93, and <span data-term="ckl">C_KL_dur</span> from 1.01 by +0.13 to +0.44. <span data-term="w1">W1</span> to clicked durations grows by +2.4 to +6.8 s. <span data-term="list_dur">Mean list duration</span> moves only +6.6 to +7.5 s at clip ≤ 100 and −0.3 to −2.4 s at clip ≥ 300, against Naive MF's 78.5 s with seed std 3.2 s.</li>
+      <li><b>Off-target: popularity calibration overshoots.</b> C_KL_pop falls from 0.67 to 0.40–0.45 at clip ≤ 100, is back at 0.67 at clip 300 (not significant), and rises to 0.93 at clip 1000 and 1.10 unclipped. Unclipped lists are less popular than the users' own histories.</li>
+      <li><b>Off-target: clickbait up, user gaps unchanged.</b> <span data-term="clickbait_share">Clickbait share</span> rises from 0.066 to 0.09–0.11 at every clip (significant). The <span data-term="ndcg_gap">NDCG gaps</span> across <span data-term="mainstream">mainstreaminess</span> groups (Δ −0.0008 to −0.0028) and activity groups (Δ +0.0016 to +0.0046) are not significant at any clip.</li>
+      <li><b>H2: the variance part is not supported.</b> Even with max weight 153 and ESS share 0.105, accuracy seed std stays at Naive MF's level (above), and the seed std of ARP@10 falls from 135 to 5 unclipped. Tail precision is not measured by the panel, so that part of H2 is untested.</li>
+    </ul>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="discussion"><h2>Discussion</h2>
+    <p><b>Mechanism → result.</b> Weighting moves loss share from head rows to tail rows, so the model is rewarded for fitting clicks on rare items. Likely because MF's per-item bias absorbs much of this, tail items gain score for every user, and the whole-pool top-10 lists move to the tail (ARP 133 unclipped).
+      At small clips, 69% (clip 10) and 36% (clip 30) of rows share the maximum weight, so the weights only separate the very top items from everything else. Interpretation: the model then leaves the head for a small set of mid-popularity items rather than the tail, which would explain why coverage first falls.
+      GAUC ranks a user's random-log candidates against each other and rises slightly, but NDCG@10 rewards putting clicked candidates at the very top. Likely because those are still often popular items, IPS-pop improves pairwise order while it demotes the items that most often win the top slots.</p>
+    <p><b>Off-target effects (RQ2, RQ3).</b> In KuaiRand popular items are shorter: median 73.7 s for head items against 83.1 s for tail items. This <span data-term="coupling">coupling</span> fits the +7 s longer lists at clip ≤ 100. At larger clips the mean duration returns to Naive MF's level, yet RSP_dur, REO_dur and C_KL_dur stay worse. So the <span data-term="off_target">off-target effect</span> on duration is about which duration groups get exposure relative to where users' relevant items are, not about the mean. The C_KL_pop overshoot shows that the target of IPS, uniform item exposure, is not the same as matching each user's taste. Likely because users' histories are popular-heavy, unclipped lists move past them. The clickbait rise is plausible because the weights amplify clicks on rare items, and a high click rate is exactly what a <span data-term="clickbait_item">clickbait item</span> has (interpretation; not tested).</p>
+    <p><b>Research questions and hypotheses.</b> RQ1: yes, by a wide margin. RQ2: duration fairness, popularity calibration (at large clips) and clickbait get worse; user gaps do not move. RQ3: a popularity correction moves duration metrics, the reverse direction of H1. RQ4: on ARP@10 vs NDCG@10 · click, among all click-trained settings in the panel, every IPS-pop setting except clip 100 is on the <span data-term="pareto">Pareto frontier</span>; clip 100 is dominated by clip 30 (and SNIPS clip 30). H2: tail coverage rises from clip 100 upwards, but seed variance does not. H3: both mainstream and non-mainstream users lose NDCG@10 (unclipped: −0.0177 and −0.0141, both significant), mainstream users slightly more, but the gap between them does not widen significantly.</p>
+    <p><b>Open questions.</b> (1) Would a user-aware propensity avoid the C_KL_pop overshoot, by correcting exposure per user instead of globally? IPS-feat tests this. (2) Is the variance cost hidden by the MF item bias and early stopping, so that a model without per-item biases would show the H2 variance?</p>
+  </section>
+
+  <!-- ===================================================================== -->
+  <section id="caveats"><h2>Caveats</h2>
+    <ul>
+      <li>The bootstrap CIs of set metrics (coverage, entropy, Gini) are biased. For coverage at clip ≥ 100 the CI of Δ does not even contain the point Δ (clip 100: Δ +0.0090, CI [0.0043, 0.0074]).</li>
+      <li>There is no multiple-comparison correction across the panel.</li>
+      <li><code>*</code> covers user sampling, not seed variance. Read it with the seed std.</li>
+      <li>Satisfaction cells rest on about 10% of test users.</li>
+      <li>The tuned lr changes from 1e-2 to 1e-3 at clip ≥ 100, so those rows mix the reweighting with an optimisation change.</li>
+      <li>The propensity is item-only and estimated from the same training log. It ignores which users saw an item and any position effect.</li>
+      <li>The random log is not exactly uniform: item frequency there has a coefficient of variation of 0.196. "Uniform exposure" is an approximation of the test condition.</li>
+      <li>The demo assumes every row has the same loss, so loss share equals weight share. Real per-row losses differ.</li>
+    </ul>
+  </section>
+  <footer>Data: test split, 19,099 users, 5 seeds per setting. Generated from outputs/sweeps via assets/data.js.</footer>
+</main></div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const M = "ips_pop";
+
+  // ---------------- diagnostics table ----------------
+  (function diagTable() {
+    const base = RB.baselineOf(M);
+    const rows = RB.sweeps(M).map((r) => {
+      const d = r.diag || {};
+      const lrFlag = r.lr !== base.lr || r.wd !== base.wd;
+      return `<tr><th>${RB.knobLabel(M, r.knob)}</th>
+        <td class="num">${d.ips_clipped_share != null ? (100 * d.ips_clipped_share).toFixed(1) + "%" : "–"}</td>
+        <td class="num">${d.ips_max_weight != null ? d.ips_max_weight.toFixed(1) : "–"}</td>
+        <td class="num">${d.ips_ess_share != null ? d.ips_ess_share.toFixed(3) : "–"}</td>
+        <td class="num">${r.lr} / ${r.wd}${lrFlag ? ' <span class="lrflag" style="font-size:11px;color:#b45309;border:1px solid #fcd34d;border-radius:4px;padding:0 3px">lr≠</span>' : ""}</td></tr>`;
+    }).join("");
+    $("diagTable").innerHTML = `<div class="rb-table-wrap"><table class="plain"><thead><tr><th>Setting</th><th class="num">rows clipped</th><th class="num">max weight (normalised)</th><th class="num">ESS share</th><th class="num">tuned lr / wd</th></tr></thead><tbody>
+      <tr><th>Naive MF</th><td class="num">–</td><td class="num">1.0</td><td class="num">1.000</td><td class="num">${base.lr} / ${base.wd}</td></tr>${rows}</tbody></table></div>`;
+  })();
+
+  // ---------------- result charts ----------------
+  const popKeys = ["arp@10", "aplt@10", "gini@10", "coverage@10", "exposure_entropy@10", "rsp_pop@10", "reo_pop@10[click]", "calibration_kl_pop@10"];
+  const offKeys = ["ndcg@10[click]", "gauc[click]", "gauc[watch_ratio]", "ndcg@10[watch_ratio]", "ndcg@10[raw_watch_time]",
+    "list_duration@10[click].mean", "wasserstein_duration@10[click]", "rsp_dur@10", "reo_dur@10[click]", "calibration_kl_dur@10",
+    "calibration_kl_pop@10", "clickbait_share@10", "ndcg_by_group@10[click|mainstream].gap", "ndcg_by_group@10[click|activity].gap",
+    "ndcg_by_group@10[click|mainstream].high", "ndcg_by_group@10[click|mainstream].low"];
+  function selectChart(id, keys, initial) {
+    const box = $(id), inner = box.querySelector(".inner");
+    RB.metricSelect(box.querySelector(".chart-h"), keys, initial,
+      (k) => RB.lineChart(inner, { methods: [M], metric: k, height: 330, tipMetrics: k === "gauc[click]" ? ["ndcg@10[click]"] : ["gauc[click]"] }));
+  }
+  selectChart("lcPop", popKeys, "arp@10");
+  selectChart("lcOff", offKeys, "ndcg@10[click]");
+
+  let showOthers = false;
+  function drawMainScatter() {
+    const methods = showOthers ? [M, "snips", "ips_feat", "pd", "pda", "macr"] : [M];
+    RB.scatter($("scMain").querySelector(".inner"), { methods, x: "arp@10", y: "ndcg@10[click]", baselines: ["naive_mf"], height: 340, margin: { r: 70 }, tipMetrics: ["gauc[click]", "coverage@10"] });
+    $("scToggle").textContent = showOthers ? "IPS-pop only" : "show other click-trained methods";
+    $("scToggle").classList.toggle("on", showOthers);
+  }
+  $("scToggle").addEventListener("click", () => { showOthers = !showOthers; drawMainScatter(); });
+  drawMainScatter();
+  RB.scatter($("scDur").querySelector(".inner"), { methods: [M], x: "rsp_pop@10", y: "rsp_dur@10", baselines: ["naive_mf"], height: 340, margin: { r: 70 }, tipMetrics: ["reo_dur@10[click]", "list_duration@10[click].mean"] });
+
+  RB.deltaTable($("dTable"), { methods: [M], metrics: [
+    "gauc[click]", "ndcg@10[click]", "arp@10", "aplt@10", "coverage@10", "rsp_pop@10", "calibration_kl_pop@10",
+    "list_duration@10[click].mean", "rsp_dur@10", "calibration_kl_dur@10", "clickbait_share@10", "ndcg_by_group@10[click|mainstream].gap"] });
+
+  // ---------------- toy demo ----------------
+  // Made-up items: n = training exposures (long-tailed, head = A, B with 76% of rows), c = click rate under uniform exposure.
+  const TOY = [
+    { id: "A", n: 6000, c: 0.60 }, { id: "B", n: 3000, c: 0.55 }, { id: "C", n: 1500, c: 0.48 }, { id: "D", n: 700, c: 0.42 },
+    { id: "E", n: 350, c: 0.38 }, { id: "F", n: 160, c: 0.33 }, { id: "G", n: 70, c: 0.30 }, { id: "H", n: 30, c: 0.26 },
+    { id: "I", n: 15, c: 0.22 }, { id: "J", n: 4, c: 0.20 }];
+  const HEAD = new Set(["A", "B"]);
+  const N = TOY.reduce((s, t) => s + t.n, 0);
+  const nMax = Math.max(...TOY.map((t) => t.n));
+  const SLIDER_MAX = 31; // 0..30 → clip = 10^(k/10) (1 … 1000); 31 → ∞
+  const kToClip = (k) => (k >= SLIDER_MAX ? Infinity : Math.pow(10, k / 10));
+  const clipToK = (c) => (c === Infinity ? SLIDER_MAX : Math.round(10 * Math.log10(c)));
+  const fmtClip = (c) => (c === Infinity ? "∞" : c < 10 ? c.toFixed(1) : String(Math.round(c)));
+  const pct = (x) => (100 * x).toFixed(1) + "%";
+
+  function compute(clip) {
+    const rows = TOY.map((t) => {
+      const p = t.n / nMax, raw = 1 / p, cw = Math.min(raw, clip);
+      return { ...t, p, raw, cw, clipped: raw > clip };
+    });
+    const meanW = rows.reduce((s, r) => s + r.n * r.cw, 0) / N;
+    let sw2 = 0, est = 0, naive = 0, clippedRows = 0, headBefore = 0, headAfter = 0;
+    for (const r of rows) {
+      r.w = r.cw / meanW;
+      r.before = r.n / N;
+      r.after = (r.n * r.w) / N;
+      sw2 += r.n * r.w * r.w;
+      est += r.after * r.c;
+      naive += r.before * r.c;
+      if (r.clipped) clippedRows += r.n;
+      if (HEAD.has(r.id)) { headBefore += r.before; headAfter += r.after; }
+    }
+    return { rows, ess: N / sw2, maxW: Math.max(...rows.map((r) => r.w)), clippedShare: clippedRows / N,
+      est, naive, truth: TOY.reduce((s, t) => s + t.c, 0) / TOY.length, headBefore, headAfter };
+  }
+
+  const svg = $("demoSvg");
+  const W = 640, H = 250, ml = 46, mr = 10, mt = 14, mb = 50, iw = W - ml - mr, ih = H - mt - mb;
+  const S = RB.svgEl;
+  function drawBars(res) {
+    svg.innerHTML = "";
+    const yMax = 0.55, y = (v) => mt + ih - (v / yMax) * ih;
+    for (let t = 0; t <= 0.5 + 1e-9; t += 0.1) {
+      S("line", { x1: ml, x2: ml + iw, y1: y(t), y2: y(t), stroke: "#eef2f7" }, svg);
+      S("text", { x: ml - 6, y: y(t) + 4, "text-anchor": "end", "font-size": 11, fill: "#64748b" }, svg).textContent = Math.round(t * 100) + "%";
+    }
+    const gw = iw / res.rows.length, bw = gw * 0.34;
+    // head shading
+    S("rect", { x: ml, y: mt, width: 2 * gw, height: ih, fill: "#dbeafe", opacity: 0.45 }, svg);
+    S("text", { x: ml + gw, y: mt + 12, "text-anchor": "middle", "font-size": 11.5, fill: "#1e40af", "font-weight": 700 }, svg).textContent = "head";
+    S("text", { x: ml + 6 * gw, y: mt + 12, "text-anchor": "middle", "font-size": 11.5, fill: "#475569", "font-weight": 700 }, svg).textContent = "tail";
+    res.rows.forEach((r, i) => {
+      const x0 = ml + i * gw + gw / 2;
+      const b1 = S("rect", { x: x0 - bw - 1, y: y(r.before), width: bw, height: Math.max(0.5, y(0) - y(r.before)), fill: "#94a3b8" }, svg);
+      const b2 = S("rect", { x: x0 + 1, y: y(r.after), width: bw, height: Math.max(0.5, y(0) - y(r.after)), fill: "#16a34a" }, svg);
+      const tipHtml = `<div class="rb-tip-h">Item ${r.id} (toy)</div><div>exposures n = ${r.n.toLocaleString("en-US")}</div><div>loss share unweighted ${pct(r.before)} → weighted ${pct(r.after)}</div><div>weight ${r.w.toFixed(2)}${r.clipped ? " (clipped)" : ""}</div>`;
+      for (const b of [b1, b2]) { b.addEventListener("mousemove", (ev) => RB.showTip(tipHtml, ev)); b.addEventListener("mouseleave", RB.hideTip); }
+      if (r.after >= 0.03 || r.after > r.before) S("text", { x: x0 + 1 + bw / 2, y: y(r.after) - 3, "text-anchor": "middle", "font-size": 9.5, fill: "#166534" }, svg).textContent = Math.round(r.after * 100) + "%";
+      S("text", { x: x0, y: mt + ih + 16, "text-anchor": "middle", "font-size": 12.5, "font-weight": 700, fill: "#1f2937" }, svg).textContent = r.id;
+      S("text", { x: x0, y: mt + ih + 30, "text-anchor": "middle", "font-size": 10.5, fill: "#64748b" }, svg).textContent = "n=" + r.n.toLocaleString("en-US");
+    });
+    S("line", { x1: ml, x2: ml + iw, y1: y(0), y2: y(0), stroke: "#94a3b8" }, svg);
+    S("text", { x: 14, y: mt + ih / 2, "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: "#334155", transform: `rotate(-90 14 ${mt + ih / 2})` }, svg).textContent = "share of total loss";
+    S("text", { x: ml + iw / 2, y: H - 4, "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: "#334155" }, svg).textContent = "toy item (n = training exposures)";
+  }
+
+  function drawTable(res, clip) {
+    const head = `<thead><tr><th>Item</th><th class="num">exposures n<sub>i</sub></th><th class="num">propensity p<sub>i</sub></th><th class="num">raw weight 1/p<sub>i</sub></th><th class="num">clipped at ${fmtClip(clip)}</th><th class="num">normalised w<sub>i</sub></th><th class="num">loss share before → after</th></tr></thead>`;
+    const body = res.rows.map((r) => `<tr><th>${r.id}${HEAD.has(r.id) ? ' <span class="pill pop" style="font-size:11px">head</span>' : ""}</th>
+      <td class="num">${r.n.toLocaleString("en-US")}</td><td class="num">${r.p < 0.01 ? r.p.toFixed(4) : r.p.toFixed(3)}</td>
+      <td class="num">${r.raw.toFixed(1)}</td><td class="num ${r.clipped ? "clipped" : ""}">${r.cw.toFixed(1)}</td>
+      <td class="num">${r.w.toFixed(2)}</td><td class="num">${pct(r.before)} → ${pct(r.after)}</td></tr>`).join("");
+    $("demoTable").innerHTML = head + "<tbody>" + body + "</tbody>";
+  }
+
+  function drawStats(res) {
+    $("dEss").textContent = res.ess.toFixed(3);
+    $("dMax").textContent = res.maxW.toFixed(2);
+    $("dClip").textContent = res.clippedShare > 0 && res.clippedShare < 0.01 ? (100 * res.clippedShare).toFixed(2) + "%" : pct(res.clippedShare);
+    $("dHead").textContent = `${pct(res.headBefore)} → ${pct(res.headAfter)}`;
+    const items = [["Logged (unweighted)", res.naive, "#94a3b8"], ["IPS-weighted", res.est, "#16a34a"], ["Uniform-exposure truth", res.truth, "#1d4ed8"]];
+    $("estBars").innerHTML = items.map(([lab, v, col]) =>
+      `<div class="est-row"><span>${lab}</span><div class="est-track"><div class="est-bar" style="width:${(v / 0.7) * 100}%;background:${col}"></div></div><b class="mono" style="background:none">${v.toFixed(3)}</b></div>`).join("");
+  }
+
+  let clip = Infinity;
+  function update() {
+    const res = compute(clip);
+    $("clipOut").textContent = fmtClip(clip) + (clip === 1 ? " (= Naive MF)" : "");
+    drawBars(res); drawTable(res, clip); drawStats(res);
+    document.querySelectorAll("#presets button").forEach((b) => b.classList.toggle("on", Number(b.dataset.v) === clip));
+  }
+  const slider = $("clipSlider");
+  slider.addEventListener("input", () => { clip = kToClip(Number(slider.value)); update(); });
+  const presetVals = [1, 10, 30, 100, 300, 1000, Infinity];
+  $("presets").innerHTML = "grid: " + presetVals.map((v) => `<button data-v="${v}">${v === 1 ? "1 (Naive MF)" : fmtClip(v)}</button>`).join("");
+  $("presets").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+    clip = Number(b.dataset.v); slider.value = clipToK(clip); update();
+  }));
+  update();
+})();
+</script>
+</body></html>

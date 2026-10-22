@@ -1,0 +1,463 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IPS-feat — debiasing trade-offs</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/data.js"></script><script src="../assets/glossary.js"></script><script src="../assets/charts.js"></script>
+<style>
+  .demo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; margin: 10px 0; }
+  .demo-panel { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .demo-panel h4 { margin: 2px 0 8px; }
+  table.toy { border-collapse: collapse; font-size: 13px; width: 100%; font-variant-numeric: tabular-nums; }
+  table.toy th, table.toy td { border: 1px solid var(--line); padding: 3px 5px; text-align: center; }
+  table.toy th { background: var(--panel); font-weight: 600; }
+  table.toy th.rowh { text-align: left; white-space: nowrap; }
+  table.toy td.clipped { outline: 2px solid #b45309; outline-offset: -2px; }
+  table.toy td.none { color: #94a3b8; }
+  table.toy td .sub { display: block; font-size: 10.5px; color: #64748b; }
+  table.toy tr.sel th.rowh { color: var(--accent); }
+  .demo-read { display: grid; grid-template-columns: max-content 1fr 1fr; gap: 2px 14px; font-size: 14px; margin-top: 6px; }
+  .demo-read .h { font-weight: 600; color: var(--muted); }
+  .note-small { font-size: 13px; color: var(--muted); }
+  .stack > .chart-box { margin-bottom: 16px; }
+</style>
+</head><body><div class="page">
+<nav class="toc"><a class="home" href="../index.html">← Overview</a>
+  <a href="#summary">Summary</a><a href="#problem">Problem</a><a href="#mechanism">How it works</a>
+  <a href="#demo">Interactive demo</a><a href="#family">Recommender family</a><a href="#impl">Our implementation</a>
+  <a href="#results">Results</a><a href="#findings">Findings</a><a href="#discussion">Discussion</a><a href="#caveats">Caveats</a></nav>
+<main>
+  <h1>IPS-feat</h1>
+  <p class="subtitle">Recommendations as Treatments: Debiasing Learning and Evaluation — Schnabel, Swaminathan, Singh, Chandak &amp; Joachims, ICML 2016 (covariate propensity). Propensity model: Factorization Machines — Rendle, ICDM 2010.</p>
+
+  <section id="summary">
+    <p><span class="pill exp">Exposure bias</span><span class="pill stage">Loss reweighting</span><span class="pill stage">Training loss</span><span class="pill fam">Model-agnostic · needs side features</span></p>
+    <p>IPS-feat is <span data-term="ipw">inverse-propensity weighting</span> in which the <span data-term="propensity">propensity</span> comes from user and item features, not from item popularity.
+      A <span data-term="fm">factorization machine (FM)</span> learns how much more often the logging recommender showed a video with these features to a user with those features than uniform random exposure would.
+      Its weights then go into the same weighted <span data-term="bce">BCE</span> loss as IPS-pop. The FM has no item ids, so it cannot copy popularity, and its propensity differs by user.</p>
+    <div class="card callout"><b>Headline result.</b> At a matched <span data-term="ess">ESS share</span> of about 0.5 (IPS-feat clip 4000: <span data-n="ips_feat:4000:ess"></span>; IPS-pop clip 100: <span data-n="ips_pop:100:ess"></span>), IPS-feat gains more GAUC · click (<span data-n="ips_feat:4000:gauc[click]:delta"></span> vs <span data-n="ips_pop:100:gauc[click]:delta"></span>) but removes less popularity (ARP@10 <span data-n="ips_feat:4000:arp@10"></span> vs <span data-n="ips_pop:100:arp@10"></span>).
+      Its largest effect is off-target: the top-10 lists get longer videos (mean duration <span data-n="ips_feat:4000:list_duration@10[click].mean:delta"></span> s, against <span data-n="ips_pop:100:list_duration@10[click].mean:delta"></span> s for IPS-pop), and duration calibration improves.</div>
+  </section>
+
+  <section id="problem"><h2>The problem it targets</h2>
+    <p>Every training row is an <span data-term="exposure">exposure</span> from the <span data-term="standard_log">standard log</span>. Kuaishou's own recommender chose those exposures.
+      A model trained on them learns the user's taste <em>and</em> the old recommender's choices. This is <span data-term="exposure_bias">exposure bias</span>.</p>
+    <p>Without correction, <span data-term="naive_mf">Naive MF</span> repeats those choices. Its top-10 lists have an <span data-term="arp">ARP@10</span> of <span data-n="naive_mf:null:arp@10"></span> training exposures, and the <span data-term="head">head</span> items hold 76% of all training exposures.
+      Its lists also have a <span data-term="list_dur">mean duration</span> of <span data-n="naive_mf:null:list_duration@10[click].mean"></span> s, while the items users clicked in the <span data-term="random_log">random-exposure log</span> average <span data-n="naive_mf:null:list_duration@10[click].ref_mean"></span> s.</p>
+    <p>IPS-pop corrects exposure with one number per item: its training-exposure count. That number is the same for every user. It cannot express that the old recommender may show a type or length of video to one kind of user more than to another.
+      Schnabel et al. suggest a second option: estimate the propensity from user and item covariates (side features). IPS-feat is that option. The question for this project is which exposure pattern it undoes, and what that does to the biases it does not target.</p>
+  </section>
+
+  <section id="mechanism"><h2>How it works</h2>
+    <h3>Training</h3>
+    <ol>
+      <li><b>Build features.</b> Each (user, item) pair becomes 32 categorical codes: 25 user fields (activity degree, follow / fan / friend / register-day ranges, 18 anonymous one-hot fields, …) and 7 item fields (video type, upload type, upload date, music type, tag, orientation, and the item's duration decile in the catalogue). There are no user or item ids.</li>
+      <li><b>Fit the propensity model.</b> Every logged training exposure (u, i) is a positive. For each one, draw one negative (u, j) with the same user and j uniform over the 7,344 items. Redraw the negatives every epoch. Train an FM with BCE for 15 epochs:
+        <div class="eq">s(u, i) = b + Σ<sub>f</sub> w<sub>x<sub>f</sub></sub> + Σ<sub>f&lt;g</sub> ⟨v<sub>x<sub>f</sub></sub>, v<sub>x<sub>g</sub></sub>⟩</div>
+        <p>Here x<sub>f</sub> is the code of field f for this pair, w is one learned weight per code, v is a learned 8-dimensional vector per code, and ⟨·,·⟩ is the dot product. The last sum covers every pair of fields. s(u, i) is the FM's <span data-term="logit">logit</span>.</p></li>
+      <li><b>Turn the logit into an inverse propensity.</b> With one negative per positive, the FM's odds estimate a density ratio, i.e. how many times more likely the log is to contain this pair than uniform random exposure:
+        <div class="eq">e<sup>s(u, i)</sup> ≈ P<sub>log</sub>(i | u) ÷ P<sub>uniform</sub>(i | u) &nbsp;&nbsp;⇒&nbsp;&nbsp; ρ(u, i) = e<sup>−s(u, i)</sup></div>
+        <p>P<sub>log</sub>(i | u) is the chance that the old recommender showed item i to user u. P<sub>uniform</sub>(i | u) = 1/7,344 is the chance under random exposure. ρ is the inverse propensity of the row.</p></li>
+      <li><b>Weights</b> (the same steps as IPS-pop):
+        <div class="eq">w̃ = ρ ÷ min ρ &nbsp;→&nbsp; w̄ = min(w̃, clip) &nbsp;→&nbsp; w = w̄ ÷ mean(w̄)</div>
+        <p>The first step makes the smallest weight 1. The second caps each weight at <span data-term="clip">clip</span>. The third sets the mean training weight to 1.</p></li>
+      <li><b>Train the MF backbone</b> with the weighted loss:
+        <div class="eq">L = (1/B) Σ<sub>r ∈ batch</sub> w<sub>r</sub> · BCE( f(u<sub>r</sub>, i<sub>r</sub>), y<sub>r</sub> )</div>
+        <p>f(u, i) is the <span data-term="mf">MF</span> score, y the click label, B the batch size. Rows that the log over-represents get small weights; rows it under-represents get large ones.</p></li>
+    </ol>
+    <h3>Inference</h3>
+    <ol><li>Score every item with the MF score f(u, i) and take the top 10. The FM is not used at inference. Scoring is identical to Naive MF; only the trained parameters differ.</li></ol>
+    <h3>Why user features act only through interactions</h3>
+    <p>Each negative has the same user as its positive. A term that depends only on the user adds the same amount to both, so it cannot tell them apart. User fields therefore matter only through the pairwise user × item terms. This is why we use an FM and not the plain logistic regression of the paper: a logistic regression would drop the user side completely under this sampling.</p>
+    <h3>The knob</h3>
+    <p>The <span data-term="knob">knob</span> is clip, the largest allowed ratio between two weights. clip = 1 would give every row weight 1, i.e. Naive MF. clip = ∞ applies the full inverse propensity, which is unbiased if the propensity is right and has the highest variance.
+      The amount of clipping at a given clip depends on the propensity model's tail, so we compare propensity models by ESS share, not by clip.</p>
+  </section>
+
+  <section id="demo"><h2>Interactive demo</h2>
+    <div class="widget">
+      <h3>Popularity propensity vs feature propensity <span class="note-small">(toy example, made-up numbers)</span></h3>
+      <p class="note-small">Three users and six videos. Each video has two features: length (short / long) and type (A / B). v1 and v2 share both features, and so do v5 and v6. The grey numbers are logged exposures n(u, i).
+        The popularity odds use each video's total count (one row for everyone). The feature odds use only the user and the video's features. For the toy we take the exact per-user feature-group ratio, the best a features-only model can do; the real FM approximates it.</p>
+      <div class="controls">
+        <label>clip <input type="range" id="d-clip" min="0" max="8" step="1" value="8"> <span class="readout" id="d-clip-v"></span></label>
+        <span>User in the bar chart:
+          <button data-user="0" class="on">U1 · high activity</button><button data-user="1">U2 · mid activity</button><button data-user="2">U3 · low activity</button></span>
+      </div>
+      <div class="demo-grid">
+        <div class="demo-panel"><h4>Exposure odds vs uniform, P<sub>log</sub> ÷ P<sub>uniform</sub></h4><div id="d-odds"></div></div>
+        <div class="demo-panel"><h4>Readout</h4>
+          <div class="demo-read" id="d-read"></div>
+          <p class="note-small">ESS share = (Σw)² ÷ (N·Σw²) over the 64 logged rows. Orange outline = clipped cell.</p></div>
+      </div>
+      <div class="demo-grid">
+        <div class="demo-panel"><h4>IPS-pop weights w</h4><div id="d-wpop"></div></div>
+        <div class="demo-panel"><h4>IPS-feat weights w</h4><div id="d-wfeat"></div></div>
+      </div>
+      <div class="demo-panel"><h4 id="d-bars-h">Share of the training loss per video</h4><div id="d-bars"></div></div>
+      <p><b>What to look at.</b> In the odds table the popularity row is one line for all users, while the feature rows differ by user: U3's long videos are rare in its log, so they get high weights for U3 only.
+        The feature model gives v1 and v2 the same weight for a given user even though v1 is far more popular, because it cannot see item ids.
+        At clip = ∞ the feature weights spread wider than the popularity weights, so the same clip leaves IPS-feat with a lower ESS share; slide clip down to see how many rows each model clips.
+        In the bar chart (dashed line = uniform exposure), at clip = ∞ IPS-feat gives each of this user's feature groups its uniform share in total (v1 + v2 together get 2/6) but cannot split it between v1 and v2. IPS-pop corrects each video's total over all users, so one user's shares can stay uneven.</p>
+    </div>
+  </section>
+
+  <section id="family"><h2>Recommender family</h2>
+    <ol>
+      <li><b>In the paper.</b> Schnabel et al. evaluate MF-IPS: <span data-term="mf">matrix factorisation</span> whose squared or absolute rating error is weighted by 1/propensity. They test it on semi-synthetic ML100K, Yahoo! R3 and Coat, with explicit ratings. The covariate (logistic-regression) propensity is used on Coat, with user features (gender, age, location, fashion-awareness) and item features (gender, type, colour, promoted). The FM we use as the propensity model is itself a feature-based (CTR-style) model from Rendle (ICDM 2010).</li>
+      <li><b>Model-agnostic?</b> Yes. The correction only multiplies each row's loss, so any backbone with a pointwise loss can use it. It needs categorical side features for users and items. Unlike IPS-pop, it does not need item popularity.</li>
+      <li><b>What we used.</b> The shared 64-dimensional MF <span data-term="backbone">backbone</span>, a <span data-term="cf">collaborative-filtering</span> model, trained on clicks with BCE.</li>
+      <li><b>Other families (reasoning, not evidence).</b> Graph CF such as LightGCN can take the same row weights if it is trained with a pointwise loss; with a pairwise loss such as BPR, the weight has to be defined per pair. Sequential and LLM-based recommenders could reweight their training loss the same way, but the propensity would then also need to depend on the user's context, which this FM does not see.</li>
+    </ol>
+  </section>
+
+  <section id="impl"><h2>Our implementation</h2>
+    <h3>Knob grid</h3>
+    <p>clip ∈ {10, 30, 100, 300, 1000, 2000, 4000, 8000, ∞}. Every value is its own <span data-term="sweep">sweep</span>. The first six values are the IPS-pop grid. They turned out to be uninformative here: the smallest FM weight is an outlier. Relative to it, the 1st percentile of w̃ is 68 and the median is 386.
+      So clip ≤ 300 clips most rows (<span data-n="ips_feat:300:clipped"></span> to <span data-n="ips_feat:10:clipped"></span> of rows on seed mean) and gives about Naive MF. We then added 2000, 4000 and 8000 to trace the informative range. All nine sweeps are reported.
+      For scale: on seed 0 the unclipped max ÷ min weight ratio is about 6.4·10⁴ for the FM, against 9,110 for the popularity propensity.</p>
+    <h3>Departures from the paper, and why</h3>
+    <ul>
+      <li><b>FM instead of logistic regression.</b> The FM is the logistic regression plus pairwise feature interactions. The interactions are needed because per-user negatives cancel every user-only term (see above).</li>
+      <li><b>No random-exposure data in the propensity.</b> The FM separates logged exposures from uniform random items drawn by us, at 1:1, so its odds target P<sub>log</sub>(i | u) ÷ P<sub>uniform</sub>(i | u). This is the same target as IPS-pop (uniform item exposure for each user), conditioned on features.</li>
+      <li><b>Implicit clicks, not ratings.</b> The paper weights rating-prediction errors (MSE/MAE, L-BFGS). We weight click BCE and train with Adam, like every method here.</li>
+      <li><b>Clipping.</b> The paper names clipping as a possible improvement but does not evaluate it. We sweep it as the knob. clip is relative to the smallest weight.</li>
+      <li><b>Propensity fitted per run.</b> The FM is trained inside each run (Adam, lr 10⁻², batch 65,536, 15 epochs; train loss 1.2507, 1.2123 and 1.2065 after 5, 10 and 15 epochs), with the run's seed. So the propensity, and the weights, change from seed to seed.</li>
+      <li><b>Side features.</b> 25 user fields and 7 item fields, each coded 0 = missing, 1..K = sorted raw values. Near-identifiers (author id, music id) and constant columns are left out. The duration decile uses catalogue bins, not log rows.</li>
+    </ul>
+    <h3>Diagnostics</h3>
+    <p>Logged once per run and averaged over 5 seeds:</p>
+    <ul>
+      <li>Propensity AUC: <span data-n="ips_feat:inf:auc"></span>. This is the AUC of the FM's logit between logged training rows and fresh uniform negatives (0.5 = it cannot tell them apart). It is measured on training positives, so it is a fit diagnostic, not a held-out estimate.</li>
+      <li>Spearman ρ with the popularity inverse propensity: <span data-n="ips_feat:inf:rho"></span>. ρ is the rank correlation over training rows (1 = same order). The two propensities agree only partly.</li>
+      <li>Per sweep: ESS share, share of rows clipped, and the largest weight after mean-normalisation (table below).</li>
+    </ul>
+    <div id="diag-table"></div>
+    <p>The tuned lr / weight decay is <span id="lr-note"></span> at every clip, the same as Naive MF. So along this curve the changes come from the weights, not from a different optimisation setting. This is not true for IPS-pop, whose tuned lr drops to 0.001 from clip 100 on.</p>
+  </section>
+
+  <section id="results"><h2>Results</h2>
+    <h3>Matched-ESS comparison with IPS-pop</h3>
+    <div class="chart-box" id="ess-box"><div class="chart-h">Metric vs ESS share <span id="ess-sel"></span></div><div class="inner"></div>
+      <p class="cap">x = ESS share, reversed so that more correction is to the right; Naive MF sits at ESS = 1. The shaded band is ESS ≈ 0.5, where IPS-feat clip 4000 and IPS-pop clip 100 (ringed) are compared. Look at how far apart the two curves are at the same ESS share. Filled dot = Δ vs Naive MF significant; bar = ± <span data-term="seed_std">seed std</span>.</p></div>
+    <div id="match-table" style="margin-top:14px"></div>
+
+    <h3>IPS-feat along its knob</h3>
+    <div class="chart-box" id="line-box"><div class="chart-h">IPS-feat vs clip <span id="line-sel"></span></div><div class="inner"></div>
+      <p class="cap">Nothing happens up to clip 300; the change happens between 300 and 4000. Watch the seed-std bars of ARP@10 and mean list duration, which are widest in that range.</p></div>
+
+    <h3>Trade-offs</h3>
+    <div class="stack">
+      <div class="chart-box"><div class="chart-h">Accuracy vs popularity</div><div id="sc-gauc"></div>
+        <p class="cap">At similar ARP@10, IPS-feat reaches a higher GAUC · click than IPS-pop. IPS-pop goes much further toward the tail.</p></div>
+      <div class="chart-box"><div class="chart-h">Popularity vs list duration</div><div id="sc-dur"></div>
+        <p class="cap">The two propensities move lists along different paths: IPS-feat lowers ARP and lengthens videos together; IPS-pop lowers ARP further with little change in duration.</p></div>
+    </div>
+
+    <h3>All IPS-feat settings</h3>
+    <div id="delta-table"></div>
+    <p class="cap note-small">Curated panel: accuracy, popularity, exposure, duration, clickbait and the user gap. Δ vs Naive MF; * = paired bootstrap CI of Δ excludes 0.</p>
+  </section>
+
+  <section id="findings"><h2>Findings</h2>
+    <ul>
+      <li class="card finding"><b>Targeted (exposure): it moves lists away from the head, but less than IPS-pop.</b> ARP@10 falls from <span data-n="naive_mf:null:arp@10"></span> to <span data-n="ips_feat:4000:arp@10"></span> at clip 4000 (Δ <span data-n="ips_feat:4000:arp@10:delta"></span>*) and to <span data-n="ips_feat:inf:arp@10"></span> unclipped. <span data-term="coverage">Coverage@10</span> roughly doubles to <span data-n="ips_feat:inf:coverage@10"></span> unclipped.
+        <span data-term="aplt">APLT@10</span> barely moves (<span data-n="naive_mf:null:aplt@10"></span> → <span data-n="ips_feat:4000:aplt@10"></span> at clip 4000; <span data-n="ips_pop:100:aplt@10"></span> for IPS-pop at matched ESS). So over 90% of list slots are still head items: IPS-feat replaces very popular items with less popular head items, not with tail items.</li>
+      <li class="card finding"><b>Accuracy at matched ESS: better <span data-term="gauc">GAUC</span>, smaller <span data-term="ndcg">NDCG@10</span> loss than IPS-pop.</b> GAUC · click <span data-n="ips_feat:4000:gauc[click]:delta"></span>* (seed std <span data-n="ips_feat:4000:gauc[click]:std"></span>) vs <span data-n="ips_pop:100:gauc[click]:delta"></span>* (seed std <span data-n="ips_pop:100:gauc[click]:std"></span>). NDCG@10 · click <span data-n="ips_feat:4000:ndcg@10[click]:delta"></span>* vs <span data-n="ips_pop:100:ndcg@10[click]:delta"></span>*. Unclipped, GAUC · click reaches <span data-n="ips_feat:inf:gauc[click]:delta"></span>*. GAUC is the accuracy that IPS targets (ranking under uniform exposure).</li>
+      <li class="card finding"><b>Off-target (duration): lists move to longer videos and duration calibration improves.</b> Mean list duration <span data-n="ips_feat:4000:list_duration@10[click].mean:delta"></span> s* at clip 4000 (seed std <span data-n="ips_feat:4000:list_duration@10[click].mean:std"></span> s), to <span data-n="ips_feat:inf:list_duration@10[click].mean"></span> s unclipped, close to the <span data-n="naive_mf:null:list_duration@10[click].ref_mean"></span> s of clicked random-log items.
+        <span data-term="ckl">C_KL</span>_dur <span data-n="ips_feat:4000:calibration_kl_dur@10:delta:3"></span>* (unclipped <span data-n="ips_feat:inf:calibration_kl_dur@10:delta:2"></span>*), and <span data-term="w1">W1</span> <span data-n="ips_feat:4000:wasserstein_duration@10[click]:delta"></span> s*. IPS-pop at matched ESS: <span data-n="ips_pop:100:list_duration@10[click].mean:delta"></span> s and C_KL_dur <span data-n="ips_pop:100:calibration_kl_dur@10:delta"></span>*.</li>
+      <li class="card finding"><b>Off-target (clickbait, diversity): both improve, with large seed spread.</b> <span data-term="clickbait_share">Clickbait share</span> <span data-n="naive_mf:null:clickbait_share@10"></span> → <span data-n="ips_feat:4000:clickbait_share@10"></span>* at clip 4000 and <span data-n="ips_feat:inf:clickbait_share@10"></span>* unclipped, but the seed std is <span data-n="ips_feat:4000:clickbait_share@10:std"></span>, about the size of Δ. It rises first (<span data-n="ips_feat:300:clickbait_share@10"></span> at clip 300). IPS-pop raises it to <span data-n="ips_pop:100:clickbait_share@10"></span>*. <span data-term="entropy">Exposure entropy</span> <span data-n="ips_feat:4000:exposure_entropy@10:delta"></span>* at clip 4000 (seed std <span data-n="ips_feat:4000:exposure_entropy@10:std"></span>); IPS-pop lowers it at every clip.</li>
+      <li class="card finding"><b>H2 variance: partly supported here.</b> The seed std of ARP@10 rises to <span data-n="ips_feat:2000:arp@10:std"></span>–<span data-n="ips_feat:1000:arp@10:std"></span> at clip 300–2000, against <span data-n="naive_mf:null:arp@10:std"></span> for Naive MF. The seed std of mean list duration rises to <span data-n="ips_feat:1000:list_duration@10[click].mean:std"></span>–<span data-n="ips_feat:2000:list_duration@10[click].mean:std"></span> s at clip 1000–2000, against <span data-n="naive_mf:null:list_duration@10[click].mean:std"></span> s. Both fall again at clip 8000 and ∞ (ARP std <span data-n="ips_feat:inf:arp@10:std"></span> unclipped). Part of this spread comes from the FM, which is re-fitted with each seed; IPS-pop has no such source.</li>
+      <li class="card finding"><b>Off-target (user gap): no significant change.</b> The <span data-term="mainstream">mainstreaminess</span> <span data-term="ndcg_gap">NDCG gap</span> changes by <span data-n="ips_feat:4000:ndcg_by_group@10[click|mainstream].gap:delta"></span> (seed std <span data-n="ips_feat:4000:ndcg_by_group@10[click|mainstream].gap:std"></span>, CI includes 0) and the activity gap by <span data-n="ips_feat:4000:ndcg_by_group@10[click|activity].gap:delta"></span> (CI includes 0). Mainstream users lose a bit more NDCG (<span data-n="ips_feat:4000:ndcg_by_group@10[click|mainstream].high:delta"></span>*) than non-mainstream users (<span data-n="ips_feat:4000:ndcg_by_group@10[click|mainstream].low:delta"></span>*).</li>
+    </ul>
+  </section>
+
+  <section id="discussion"><h2>Discussion</h2>
+    <p><b>Mechanism → result.</b> The FM sees item features, including the duration decile, but no item id. Its inverse propensity ranks rows only partly like the popularity one (ρ = 0.45). Weighting by it raises the training weight of rows whose feature profile the old recommender showed less often than uniform exposure would.
+      Likely because longer videos are among those under-shown profiles, the MF learns to rank longer videos higher (interpretation; we did not fit the FM without the duration field). The lists move toward the duration users actually click in the random log, so this <span data-term="off_target">off-target effect</span> happens to go in a good direction here.</p>
+    <p><b>Coupling (RQ3).</b> In KuaiRand, popular items are shorter: the 200 most-exposed items have a median of <span data-fact="median_dur_top200_s"></span> s against <span data-fact="median_dur_pool_s"></span> s for the pool. So any popularity correction should lengthen lists a little. <span data-term="coupling">Coupling</span> alone does not explain IPS-feat: IPS-pop at clip 100 lowers ARP@10 more (<span data-n="ips_pop:100:arp@10"></span>) yet adds only <span data-n="ips_pop:100:list_duration@10[click].mean:delta"></span> s, while IPS-feat adds <span data-n="ips_feat:4000:list_duration@10[click].mean:delta"></span> s. The popularity propensity left duration nearly fixed and worsened duration calibration; the feature propensity improves it. The coupling runs both ways, and its sign depends on what the propensity model sees.</p>
+    <p><b>Research questions.</b> RQ1: partly. It lowers ARP@10 and raises coverage, but much less than IPS-pop, and APLT@10 hardly moves. RQ2: duration calibration, W1, clickbait share and entropy improve at clip ≥ 4000; the user gaps do not change significantly. RQ4: at matched ESS neither propensity dominates. IPS-feat is better on GAUC, NDCG, duration and clickbait; IPS-pop is better on ARP and APLT. On the NDCG × ARP plane, IPS-pop clip 10 (NDCG <span data-n="ips_pop:10:ndcg@10[click]"></span>, ARP <span data-n="ips_pop:10:arp@10"></span>) dominates IPS-feat unclipped (<span data-n="ips_feat:inf:ndcg@10[click]"></span>, <span data-n="ips_feat:inf:arp@10"></span>); on GAUC × ARP it does not. H2: coverage rises (<span data-n="naive_mf:null:coverage@10"></span> → <span data-n="ips_feat:inf:coverage@10"></span>) and seed variance rises in the transition range clip 300–2000, unlike IPS-pop; we have no direct tail-precision measure. H3 is not supported: the mainstreaminess gap does not change significantly. H1 does not apply, since this is not a duration method; the opposite move (to longer videos) appears as an off-target effect.</p>
+    <p><b>The trade-off this method exposes.</b> "Exposure bias" is not one thing. The choice of propensity model decides which exposure pattern is undone: item popularity (IPS-pop) or a feature profile that includes length (IPS-feat). The same name, IPS, then has opposite effects on duration and clickbait.</p>
+    <p><b>Open questions.</b> (1) Is the duration shift caused by the duration-decile field? Re-fitting the FM without that field would test it. (2) Would a propensity model with both item ids and features combine IPS-pop's tail shift with IPS-feat's accuracy, or only add variance?</p>
+  </section>
+
+  <section id="caveats"><h2>Caveats</h2>
+    <ul>
+      <li>The bootstrap CIs of set metrics (coverage, entropy, Gini) are biased.</li>
+      <li>There is no multiple-comparison correction across the panel.</li>
+      <li>* covers user sampling only, not <span data-term="seed_std">seed</span> variance. Several IPS-feat effects (clickbait, APLT, duration at clip 1000–2000) have seed std close to Δ.</li>
+      <li>Satisfaction cells rest on about 10% of users.</li>
+      <li>The matched-ESS pair is approximate (<span data-n="ips_feat:4000:ess"></span> vs <span data-n="ips_pop:100:ess"></span>), and IPS-pop clip 100 was tuned to lr 0.001 while IPS-feat stays at 0.01. Part of that comparison is an optimisation difference.</li>
+      <li>The clips 2000, 4000 and 8000 were added after the first six were seen to be uninformative. The grid is therefore partly post hoc.</li>
+      <li>The propensity AUC (<span data-n="ips_feat:inf:auc"></span>) is measured on training positives against fresh negatives. It is a fit diagnostic, not a held-out check that the propensity is correct.</li>
+      <li>The FM is re-fitted with each seed, so seed std mixes MF training noise and propensity-model noise.</li>
+    </ul>
+  </section>
+  <footer>Data: test split, 19,099 users, 5 seeds per setting. Generated from outputs/sweeps via assets/data.js.</footer>
+</main></div>
+<script>
+(function () {
+  const R = RB.R;
+  const MINUS = "\u2212";
+  const pretty = (s) => s.replace(/^-/, MINUS);
+
+  // ---------- numbers in prose: data-n="method:knob:metric[:kind[:digits]]" ----------
+  const DIAG = { ess: ["ips_ess_share", 2], clipped: ["ips_clipped_share", -1], maxw: ["ips_max_weight", 1], auc: ["propensity_auc", 3], rho: ["propensity_pop_spearman", 2] };
+  function numText(spec) {
+    const p = spec.split(":");
+    const [m, knob] = p;
+    const rec = RB.find(m, knob === "null" ? null : knob);
+    if (!rec) throw new Error("no sweep " + spec);
+    if (DIAG[p[2]]) {
+      const [k, d] = DIAG[p[2]], v = rec.diag[k];
+      if (v == null) throw new Error("no diag " + spec);
+      return d < 0 ? Math.round(v * 100) + "%" : v.toFixed(d);
+    }
+    const key = p[2], kind = p[3] || "val", digits = p[4] != null ? Number(p[4]) : undefined;
+    const v = kind === "delta" ? RB.delta(rec, key) : kind === "std" ? RB.std(rec, key) : RB.val(rec, key);
+    if (Number.isNaN(v)) throw new Error("no value " + spec);
+    const d = digits != null ? digits : RB.info(key).digits;
+    let s = Math.abs(v) >= 1000 && d === 0 ? Math.round(Math.abs(v)).toLocaleString("en-US") : Math.abs(v).toFixed(d);
+    if (v < 0 && Number(s.replace(/,/g, "")) !== 0) s = MINUS + s;
+    else if (kind === "delta") s = "+" + s;
+    return s;
+  }
+  document.querySelectorAll("[data-n]").forEach((n) => { n.textContent = numText(n.dataset.n); });
+  document.querySelectorAll("[data-fact]").forEach((n) => { n.textContent = R.facts[n.dataset.fact].toFixed(1); });
+  const featRecs = RB.sweeps("ips_feat");
+  const lrs = [...new Set(featRecs.map((r) => r.lr + " / " + r.wd))];
+  document.getElementById("lr-note").textContent = lrs.join(", ");
+
+  // ---------- diagnostics table ----------
+  (function () {
+    const rows = featRecs.map((r) => `<tr><th class="rowh">${RB.knobLabel("ips_feat", r.knob)}</th><td class="num">${r.diag.ips_ess_share.toFixed(3)}</td><td class="num">${(100 * r.diag.ips_clipped_share).toFixed(1)}%</td><td class="num">${r.diag.ips_max_weight.toFixed(1)}</td><td class="num">${r.lr} / ${r.wd}</td></tr>`).join("");
+    document.getElementById("diag-table").innerHTML = `<div class="rb-table-wrap"><table class="rb-table"><thead><tr><th>Setting</th><th>ESS share</th><th>rows clipped</th><th>max weight (mean = 1)</th><th>tuned lr / wd</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="rb-note">Seed means over 5 runs. Naive MF has ESS share 1 by definition (all weights equal).</p>`;
+  })();
+
+  // ---------- ESS-matched chart ----------
+  const ESS_METHODS = ["ips_feat", "ips_pop"];
+  const MATCH = { ips_feat: "4000", ips_pop: "100" };
+  const S = RB.svgEl;
+  function ticks(lo, hi, n) {
+    const span = hi - lo, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+    const step = [1, 2, 2.5, 5, 10].map((x) => x * mag).find((s) => span / s <= n);
+    const out = [];
+    for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-12; t += step) out.push(+t.toPrecision(12));
+    return out;
+  }
+  function tipHtml(rec, key) {
+    const d = RB.delta(rec, key), ci = RB.dci(rec, key);
+    const ess = rec.diag.ips_ess_share != null ? rec.diag.ips_ess_share : 1;
+    const dl = Number.isNaN(d) ? "" : `<div>Δ ${pretty(RB.fmt(key, d, { signed: true }))}${ci ? ` [${pretty(RB.fmt(key, ci[0]))}, ${pretty(RB.fmt(key, ci[1]))}]` : ""}${RB.sig(rec, key) ? " *" : ""}</div>`;
+    return `<div class="rb-tip-h" style="color:${RB.color(rec.method)}">${RB.methodName(rec.method)} · ${RB.knobLabel(rec.method, rec.knob)}</div>
+      <div>ESS share ${ess.toFixed(3)}</div><div><b>${RB.info(key).label}</b>: ${RB.fmt(key, RB.val(rec, key))} ± ${RB.fmt(key, RB.std(rec, key))}</div>${dl}
+      <div class="rb-tip-f">tuned lr ${rec.lr}, wd ${rec.wd} · ± = seed std</div>`;
+  }
+  function essChart(box, key) {
+    const W = 680, H = 380, m = { l: 74, r: 24, t: 20, b: 56 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+    box.innerHTML = "";
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, class: "rb-chart", role: "img" }, box);
+    const base = RB.find("naive_mf", null);
+    const series = ESS_METHODS.map((mm) => ({ m: mm, recs: RB.sweeps(mm) }));
+    const vals = [RB.val(base, key)];
+    series.forEach((s) => s.recs.forEach((r) => vals.push(RB.val(r, key) - RB.std(r, key), RB.val(r, key) + RB.std(r, key))));
+    const fin = vals.filter(Number.isFinite);
+    let lo = Math.min(...fin), hi = Math.max(...fin);
+    if (!(hi > lo)) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.07; lo -= pad; hi += pad;
+    const X0 = 1.04, X1 = 0.04;
+    const x = (e) => m.l + ((X0 - e) / (X0 - X1)) * iw;
+    const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
+    // matched band
+    S("rect", { x: x(0.58), y: m.t, width: x(0.47) - x(0.58), height: ih, fill: "#fef3c7", opacity: 0.7 }, svg);
+    S("text", { x: (x(0.58) + x(0.47)) / 2, y: m.t + 12, "text-anchor": "middle", class: "rb-tick" }, svg).textContent = "ESS ≈ 0.5";
+    const dg = RB.info(key).digits;
+    for (const t of ticks(lo, hi, 5)) {
+      S("line", { x1: m.l, x2: m.l + iw, y1: y(t), y2: y(t), class: "rb-grid" }, svg);
+      S("text", { x: m.l - 8, y: y(t) + 4, "text-anchor": "end", class: "rb-tick" }, svg).textContent = pretty(RB.fmt(key, t, { digits: Math.max(0, dg - 1) }));
+    }
+    for (const t of [1, 0.8, 0.6, 0.4, 0.2]) {
+      S("line", { x1: x(t), x2: x(t), y1: m.t + ih, y2: m.t + ih + 5, class: "rb-axis" }, svg);
+      S("text", { x: x(t), y: m.t + ih + 19, "text-anchor": "middle", class: "rb-tick" }, svg).textContent = t.toFixed(1);
+    }
+    S("line", { x1: m.l, x2: m.l + iw, y1: m.t + ih, y2: m.t + ih, class: "rb-axis" }, svg);
+    S("line", { x1: m.l, x2: m.l, y1: m.t, y2: m.t + ih, class: "rb-axis" }, svg);
+    S("text", { x: m.l + iw / 2, y: H - 12, "text-anchor": "middle", class: "rb-label" }, svg).textContent = "ESS share (← less correction · more correction →)";
+    const yl = S("text", { x: 16, y: m.t + ih / 2, "text-anchor": "middle", class: "rb-label", transform: `rotate(-90 16 ${m.t + ih / 2})` }, svg);
+    yl.textContent = RB.info(key).label + (RB.info(key).better === "up" ? " ↑" : RB.info(key).better === "down" ? " ↓" : "");
+    // baseline
+    const by = y(RB.val(base, key));
+    S("line", { x1: m.l, x2: m.l + iw, y1: by, y2: by, class: "rb-base" }, svg);
+    S("text", { x: m.l + iw - 4, y: by - 5, "text-anchor": "end", class: "rb-base-t" }, svg).textContent = `Naive MF ${RB.fmt(key, RB.val(base, key))}`;
+    const bd = S("path", { d: `M${x(1)} ${by - 8}L${x(1) + 8} ${by}L${x(1)} ${by + 8}L${x(1) - 8} ${by}Z`, fill: RB.color("naive_mf"), class: "rb-pt" }, svg);
+    bd.addEventListener("mousemove", (ev) => RB.showTip(tipHtml(base, key), ev));
+    bd.addEventListener("mouseleave", RB.hideTip);
+    for (const s of series) {
+      const c = RB.color(s.m);
+      const pts = s.recs.map((r) => ({ r, px: x(r.diag.ips_ess_share), py: y(RB.val(r, key)) })).filter((p) => Number.isFinite(p.py));
+      S("polyline", { points: pts.map((p) => p.px + "," + p.py).join(" "), fill: "none", stroke: c, "stroke-width": 2.2, "stroke-dasharray": s.m === "ips_pop" ? "7 4" : "none" }, svg);
+      let lastLabelX = x(1) + 4;
+      const nearOne = pts.filter((p) => p.r.diag.ips_ess_share > 0.99);
+      if (nearOne.length) {
+        const ks = nearOne.map((p) => (p.r.knob === "inf" ? "∞" : p.r.knob));
+        S("text", { x: nearOne[0].px - 10, y: nearOne[0].py + 18, "text-anchor": "end", class: "rb-pt-t", fill: c }, svg).textContent = ks.length > 1 ? `${ks[0]}–${ks[ks.length - 1]}` : ks[0];
+      }
+      for (const p of pts) {
+        const sd = RB.std(p.r, key), v = RB.val(p.r, key);
+        S("line", { x1: p.px, x2: p.px, y1: y(v - sd), y2: y(v + sd), stroke: c, "stroke-width": 1.2, opacity: 0.7 }, svg);
+        if (String(p.r.knob) === MATCH[s.m]) S("circle", { cx: p.px, cy: p.py, r: 10, fill: "none", stroke: c, "stroke-width": 1.5, "stroke-dasharray": "3 2" }, svg);
+        const sg = RB.sig(p.r, key);
+        const dot = S("circle", { cx: p.px, cy: p.py, r: sg ? 5.5 : 4, fill: sg ? c : "#fff", stroke: c, "stroke-width": 2, class: "rb-pt" }, svg);
+        dot.addEventListener("mousemove", (ev) => RB.showTip(tipHtml(p.r, key), ev));
+        dot.addEventListener("mouseleave", RB.hideTip);
+        if (p.r.diag.ips_ess_share <= 0.99 && p.px - lastLabelX > 26) {
+          S("text", { x: p.px + 6, y: p.py + (s.m === "ips_feat" ? -9 : 17), class: "rb-pt-t", fill: c }, svg).textContent = p.r.knob === "inf" ? "∞" : p.r.knob;
+          lastLabelX = p.px;
+        }
+      }
+    }
+    const lg = document.createElement("div");
+    lg.className = "rb-legend";
+    lg.innerHTML = ESS_METHODS.map((mm) => `<span><i style="background:${RB.color(mm)}"></i>${RB.methodName(mm)}${mm === "ips_pop" ? " (dashed)" : " (solid)"}</span>`).join("") +
+      `<span><i class="rb-lg-diamond"></i>Naive MF (ESS = 1)</span><span><i class="rb-lg-sig"></i>filled = Δ significant</span><span><i class="rb-lg-bar"></i>bar = ± seed std</span><span>labels = clip</span>`;
+    box.appendChild(lg);
+  }
+  const SEL_KEYS = ["gauc[click]", "gauc[long_view]", "ndcg@10[click]", "ndcg@10[watch_ratio]", "arp@10", "aplt@10", "gini@10", "rsp_pop@10", "reo_pop@10[click]", "calibration_kl_pop@10",
+    "coverage@10", "exposure_entropy@10", "list_duration@10[click].mean", "wasserstein_duration@10[click]", "rsp_dur@10", "calibration_kl_dur@10", "clickbait_share@10",
+    "ndcg_by_group@10[click|mainstream].gap", "ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|dur_pref].gap"];
+  const essBox = document.getElementById("ess-box");
+  RB.metricSelect(document.getElementById("ess-sel"), SEL_KEYS, "list_duration@10[click].mean", (k) => essChart(essBox.querySelector(".inner"), k));
+
+  // ---------- matched-ESS table ----------
+  (function () {
+    const base = RB.find("naive_mf", null), F = RB.find("ips_feat", "4000"), P = RB.find("ips_pop", "100");
+    const keys = ["gauc[click]", "ndcg@10[click]", "arp@10", "aplt@10", "coverage@10", "exposure_entropy@10", "rsp_pop@10", "list_duration@10[click].mean", "wasserstein_duration@10[click]", "calibration_kl_dur@10", "clickbait_share@10", "ndcg_by_group@10[click|mainstream].gap"];
+    const cell = (r, k) => {
+      const d = RB.delta(r, k), s = RB.sig(r, k), b = RB.info(k).better;
+      let cls = "neu";
+      if (b) cls = (b === "up" ? d > 0 : d < 0) ? "good" : "bad";
+      return `<td class="num ${s ? cls + " sig" : "ns"}">${pretty(RB.fmt(k, RB.val(r, k)))} <span class="sd">± ${RB.fmt(k, RB.std(r, k))}</span><div class="sd">${pretty(RB.fmt(k, d, { signed: true }))}${s ? "*" : ""}</div></td>`;
+    };
+    const rows = keys.map((k) => `<tr><th class="rowh">${RB.info(k).label}${RB.info(k).better === "up" ? " ↑" : RB.info(k).better === "down" ? " ↓" : ""}</th>
+      <td class="num">${RB.fmt(k, RB.val(base, k))} <span class="sd">± ${RB.fmt(k, RB.std(base, k))}</span></td>${cell(F, k)}${cell(P, k)}</tr>`).join("");
+    document.getElementById("match-table").innerHTML = `<div class="rb-table-wrap"><table class="rb-table"><thead><tr><th>Metric</th><th>Naive MF</th>
+      <th><span class="dot" style="background:${RB.color("ips_feat")}"></span>IPS-feat clip = 4000 (ESS ${F.diag.ips_ess_share.toFixed(2)})</th>
+      <th><span class="dot" style="background:${RB.color("ips_pop")}"></span>IPS-pop clip = 100 (ESS ${P.diag.ips_ess_share.toFixed(2)})</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="rb-note">Seed mean ± seed std; second line Δ vs Naive MF. <span class="good sig">green</span> = better, <span class="bad sig">red</span> = worse, <span class="neu sig">blue</span> = no preferred direction; faded = CI of Δ includes 0. IPS-pop clip 100 was tuned to lr ${P.lr} (IPS-feat: ${F.lr}).</p>`;
+  })();
+
+  // ---------- standard charts ----------
+  const lineBox = document.getElementById("line-box");
+  RB.metricSelect(document.getElementById("line-sel"), SEL_KEYS, "arp@10", (k) => RB.lineChart(lineBox.querySelector(".inner"), { width: 1000, height: 400, methods: ["ips_feat"], metric: k, tipMetrics: ["gauc[click]", "list_duration@10[click].mean"] }));
+  const SC = { width: 1000, height: 400, margin: { r: 90 } };
+  RB.scatter(document.getElementById("sc-gauc"), { ...SC, methods: ["ips_feat", "ips_pop"], x: "arp@10", y: "gauc[click]", tipMetrics: ["ndcg@10[click]"] });
+  RB.scatter(document.getElementById("sc-dur"), { ...SC, methods: ["ips_feat", "ips_pop"], x: "arp@10", y: "list_duration@10[click].mean", tipMetrics: ["calibration_kl_dur@10"] });
+  RB.deltaTable(document.getElementById("delta-table"), { methods: ["ips_feat"], metrics: ["gauc[click]", "ndcg@10[click]", "arp@10", "aplt@10", "coverage@10", "exposure_entropy@10",
+    "list_duration@10[click].mean", "wasserstein_duration@10[click]", "calibration_kl_dur@10", "clickbait_share@10", "ndcg_by_group@10[click|mainstream].gap", "ndcg_by_group@10[click|activity].gap"] });
+
+  // ---------- toy demo ----------
+  const ITEMS = [
+    { id: "v1", len: "short", type: "A" }, { id: "v2", len: "short", type: "A" }, { id: "v3", len: "short", type: "B" },
+    { id: "v4", len: "long", type: "A" }, { id: "v5", len: "long", type: "B" }, { id: "v6", len: "long", type: "B" },
+  ];
+  const USERS = ["U1 · high", "U2 · mid", "U3 · low"];
+  const NLOG = [[6, 4, 3, 2, 5, 4], [8, 5, 3, 2, 1, 1], [10, 6, 2, 1, 1, 0]];
+  const CLIPS = [1, 1.5, 2, 3, 4, 6, 8, 12, Infinity];
+  const nI = ITEMS.length, nU = USERS.length;
+  const grp = (i) => ITEMS[i].len + ITEMS[i].type;
+  const itemCount = ITEMS.map((_, i) => NLOG.reduce((a, r) => a + r[i], 0));
+  const total = itemCount.reduce((a, b) => a + b, 0);
+  const userCount = NLOG.map((r) => r.reduce((a, b) => a + b, 0));
+  // odds vs uniform: popularity = item marginal (same for all users); feature = per-user feature-group share spread over the group
+  const popOdds = itemCount.map((c) => (nI * c) / total);
+  const featOdds = NLOG.map((r, u) => ITEMS.map((_, i) => {
+    const g = grp(i), members = ITEMS.map((_, j) => j).filter((j) => grp(j) === g);
+    const ng = members.reduce((a, j) => a + r[j], 0);
+    return (nI * ng) / (members.length * userCount[u]);
+  }));
+  function weights(oddsFn, clip) {
+    const raw = [];
+    for (let u = 0; u < nU; u++) for (let i = 0; i < nI; i++) if (NLOG[u][i] > 0) raw.push({ u, i, n: NLOG[u][i], rho: 1 / oddsFn(u, i) });
+    const mn = Math.min(...raw.map((r) => r.rho));
+    let rows = 0, clipped = 0;
+    raw.forEach((r) => { r.wt = r.rho / mn; r.clipped = r.wt > clip + 1e-9; r.wb = Math.min(r.wt, clip); rows += r.n; if (r.clipped) clipped += r.n; });
+    const mean = raw.reduce((a, r) => a + r.n * r.wb, 0) / rows;
+    raw.forEach((r) => { r.w = r.wb / mean; });
+    const s1 = raw.reduce((a, r) => a + r.n * r.w, 0), s2 = raw.reduce((a, r) => a + r.n * r.w * r.w, 0);
+    const grid = NLOG.map(() => Array(nI).fill(null));
+    raw.forEach((r) => { grid[r.u][r.i] = r; });
+    return { grid, ess: (s1 * s1) / (rows * s2), clipped: clipped / rows, ratio: Math.max(...raw.map((r) => r.wt)), maxw: Math.max(...raw.map((r) => r.w)) };
+  }
+  let selUser = 0;
+  const heat = (v, vmax, rgb) => `rgba(${rgb},${Math.min(0.85, 0.08 + 0.77 * (v / vmax)).toFixed(3)})`;
+  const itemHead = `<tr><th></th>${ITEMS.map((it) => `<th>${it.id}<span class="sub" style="display:block;font-weight:400;font-size:10.5px;color:#64748b">${it.len} · ${it.type}</span></th>`).join("")}</tr>`;
+  function renderOdds() {
+    const vmax = Math.max(...popOdds, ...featOdds.flat());
+    const row = (label, vals, rgb, sel) => `<tr class="${sel ? "sel" : ""}"><th class="rowh">${label}</th>${vals.map((v) => `<td style="background:${heat(v, vmax, rgb)}">${v.toFixed(2)}</td>`).join("")}</tr>`;
+    document.getElementById("d-odds").innerHTML = `<table class="toy">${itemHead}
+      ${row("Popularity · all users", popOdds, "22,163,74", false)}
+      ${featOdds.map((r, u) => row("Feature · " + USERS[u], r, "13,148,136", u === selUser)).join("")}
+      <tr><th class="rowh">logged count n<sub>i</sub></th>${itemCount.map((c) => `<td class="none">${c}</td>`).join("")}</tr></table>
+      <p class="note-small">Odds &gt; 1: the log shows the video more often than uniform exposure would (1/6). Inverse propensity ρ = 1 ÷ odds.</p>`;
+  }
+  function renderWeights(id, W, rgb, vmax) {
+    const rows = W.grid.map((r, u) => `<tr class="${u === selUser ? "sel" : ""}"><th class="rowh">${USERS[u]}</th>${r.map((c) => c ? `<td class="${c.clipped ? "clipped" : ""}" style="background:${heat(c.w, vmax, rgb)}">${c.w.toFixed(2)}<span class="sub">n = ${c.n}</span></td>` : `<td class="none">·<span class="sub">n = 0</span></td>`).join("")}</tr>`).join("");
+    document.getElementById(id).innerHTML = `<table class="toy">${itemHead}${rows}</table>`;
+  }
+  function renderBars(Wp, Wf) {
+    const u = selUser, el = document.getElementById("d-bars");
+    const share = (W) => { const m = ITEMS.map((_, i) => (W && W.grid[u][i] ? W.grid[u][i].n * W.grid[u][i].w : 0)); const s = m.reduce((a, b) => a + b, 0); return m.map((v) => v / s); };
+    const logged = (() => { const s = userCount[u]; return NLOG[u].map((v) => v / s); })();
+    const series = [{ name: "logged (Naive MF)", c: RB.color("naive_mf"), v: logged }, { name: "IPS-pop", c: RB.color("ips_pop"), v: share(Wp) }, { name: "IPS-feat", c: RB.color("ips_feat"), v: share(Wf) }];
+    const W = 900, H = 240, m = { l: 48, r: 12, t: 12, b: 40 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const vmax = Math.max(0.35, ...series.flatMap((s) => s.v));
+    const y = (v) => m.t + ih - (v / vmax) * ih;
+    el.innerHTML = "";
+    const svg = S("svg", { viewBox: `0 0 ${W} ${H}`, class: "rb-chart", role: "img" }, el);
+    for (const t of [0, 0.1, 0.2, 0.3, 0.4, 0.5].filter((t) => t <= vmax + 1e-9)) {
+      S("line", { x1: m.l, x2: m.l + iw, y1: y(t), y2: y(t), class: "rb-grid" }, svg);
+      S("text", { x: m.l - 6, y: y(t) + 4, "text-anchor": "end", class: "rb-tick" }, svg).textContent = t.toFixed(1);
+    }
+    const gw = iw / nI, bw = (gw - 14) / 3;
+    ITEMS.forEach((it, i) => {
+      series.forEach((s, k) => {
+        const x0 = m.l + i * gw + 7 + k * bw;
+        S("rect", { x: x0, y: y(s.v[i]), width: bw - 2, height: Math.max(0, y(0) - y(s.v[i])), fill: s.c }, svg);
+      });
+      S("text", { x: m.l + i * gw + gw / 2, y: m.t + ih + 15, "text-anchor": "middle", class: "rb-tick" }, svg).textContent = it.id;
+      S("text", { x: m.l + i * gw + gw / 2, y: m.t + ih + 29, "text-anchor": "middle", class: "rb-tick" }, svg).textContent = it.len + " · " + it.type;
+    });
+    S("line", { x1: m.l, x2: m.l + iw, y1: y(1 / nI), y2: y(1 / nI), class: "rb-base" }, svg);
+    S("text", { x: m.l + iw - 4, y: y(1 / nI) - 5, "text-anchor": "end", class: "rb-base-t" }, svg).textContent = "uniform 1/6";
+    S("line", { x1: m.l, x2: m.l + iw, y1: y(0), y2: y(0), class: "rb-axis" }, svg);
+    const lg = document.createElement("div");
+    lg.className = "rb-legend";
+    lg.innerHTML = series.map((s) => `<span><i style="background:${s.c}"></i>${s.name}</span>`).join("") + `<span><i class="rb-lg-base"></i>uniform exposure</span>`;
+    el.appendChild(lg);
+    document.getElementById("d-bars-h").textContent = `Share of ${USERS[u]}'s training loss per video (weights × logged rows)`;
+  }
+  function renderDemo() {
+    const clip = CLIPS[Number(document.getElementById("d-clip").value)];
+    document.getElementById("d-clip-v").textContent = clip === Infinity ? "∞" : String(clip);
+    const Wp = weights((u, i) => popOdds[i], clip), Wf = weights((u, i) => featOdds[u][i], clip);
+    const vmax = Math.max(Wp.maxw, Wf.maxw);
+    renderOdds();
+    renderWeights("d-wpop", Wp, "22,163,74", vmax);
+    renderWeights("d-wfeat", Wf, "13,148,136", vmax);
+    renderBars(Wp, Wf);
+    const f = (v) => v.toFixed(2);
+    document.getElementById("d-read").innerHTML = `<span></span><span class="h">IPS-pop</span><span class="h">IPS-feat</span>
+      <span>unclipped max ÷ min weight</span><span>${f(Wp.ratio)}</span><span>${f(Wf.ratio)}</span>
+      <span>rows clipped</span><span>${Math.round(100 * Wp.clipped)}%</span><span>${Math.round(100 * Wf.clipped)}%</span>
+      <span>largest weight (mean = 1)</span><span>${f(Wp.maxw)}</span><span>${f(Wf.maxw)}</span>
+      <span>ESS share</span><span class="readout">${Wp.ess.toFixed(3)}</span><span class="readout">${Wf.ess.toFixed(3)}</span>`;
+  }
+  document.getElementById("d-clip").addEventListener("input", renderDemo);
+  document.querySelectorAll("#demo button[data-user]").forEach((b) => b.addEventListener("click", () => {
+    selUser = Number(b.dataset.user);
+    document.querySelectorAll("#demo button[data-user]").forEach((x) => x.classList.toggle("on", x === b));
+    renderDemo();
+  }));
+  renderDemo();
+})();
+</script>
+</body></html>

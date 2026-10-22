@@ -1,0 +1,368 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PD / PDA — debiasing trade-offs</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/data.js"></script><script src="../assets/glossary.js"></script><script src="../assets/charts.js"></script>
+<style>
+  /* page-local styles for the demo only */
+  .toy-table { border-collapse: collapse; font-size: 13.5px; width: 100%; background: #fff; }
+  .toy-table th, .toy-table td { padding: 4px 7px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  .toy-table th:first-child, .toy-table td:first-child { text-align: left; }
+  .toy-table thead th { background: var(--panel); font-weight: 600; }
+  .toy-table td.sc { min-width: 150px; }
+  .toy-bar { position: relative; height: 9px; background: #f1f5f9; border-radius: 2px; margin-top: 2px; }
+  .toy-bar i { position: absolute; top: 0; height: 9px; }
+  .toy-bar i.f { background: #94a3b8; left: 0; }
+  .toy-bar i.up { background: #0891b2; }
+  .toy-bar i.down { background: repeating-linear-gradient(45deg, #fca5a5 0 3px, #fee2e2 3px 6px); }
+  .rank { display: inline-block; min-width: 20px; padding: 0 4px; border-radius: 4px; font-size: 11.5px; font-weight: 700; text-align: center; background: #e2e8f0; color: #334155; }
+  .rank.top { background: #0891b2; color: #fff; }
+  .toy-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 12px; }
+  .toy-list { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: #fff; font-size: 14px; }
+  .toy-list h4 { margin: 0 0 6px; }
+  .toy-list ol { margin: 0 0 6px; padding-left: 20px; }
+  .toy-list .ref { color: var(--muted); font-size: 12.5px; }
+  .chart-row { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 14px 0; }
+  table.plain td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #findings ul { list-style: none; padding-left: 0; }
+  #findings li { max-width: none; }
+</style>
+</head><body><div class="page">
+<nav class="toc"><a class="home" href="../index.html">← Overview</a>
+  <a href="#summary">Summary</a><a href="#problem">Problem</a><a href="#mechanism">How it works</a>
+  <a href="#demo">Interactive demo</a><a href="#family">Recommender family</a><a href="#impl">Our implementation</a>
+  <a href="#results">Results</a><a href="#findings">Findings</a><a href="#discussion">Discussion</a><a href="#caveats">Caveats</a></nav>
+<main>
+  <h1>PD and PDA</h1><p class="subtitle">Causal Intervention for Leveraging Popularity Bias in Recommendation — Zhang et al., SIGIR 2021</p>
+
+  <section id="summary">
+    <p>
+      <span class="pill pop">Popularity bias</span>
+      <span class="pill stage">Causal adjustment of the score</span>
+      <span class="pill stage">Training loss</span>
+      <span class="pill stage">Inference score</span>
+      <span class="pill fam">MF in the paper · model-agnostic score</span>
+    </p>
+    <p>PD and PDA treat item <span data-term="pop">popularity</span> as a <span data-term="confounder">confounder</span>: it affects both which videos the platform showed and how likely users were to click them.
+      Both methods train the <span data-term="backbone">backbone</span> with an extra popularity term, so the backbone's score <span class="math">f(u, i)</span> no longer has to explain popularity.
+      PD (Popularity-bias Deconfounding) ranks by <span class="math">f</span> alone and so removes popularity from the ranking.
+      PDA (… and Adjusting) adds back the popularity of the most recent training period, which the paper treats as a forecast of what will stay popular.</p>
+    <div class="card callout">
+      <b>Headline result.</b>
+      PD lowers <span data-term="arp">ARP@10</span> from <b data-v="naive_mf~base~arp@10"></b> to <b data-v="pd~0.2~arp@10"></b> at γ = 0.2, and pays for it with <b data-v="pd~0.2~gauc[click]" data-k="delta"></b> <span data-term="gauc">GAUC</span> on clicks.
+      PDA (γ ≥ 0.05) gains accuracy under every label (GAUC click about +0.012), but every user gets nearly the same list:
+      <span data-term="coverage">coverage@10</span> drops to about 0.004 (about 28–38 of 7,344 items), and the mean video length in the lists drops from <b data-v="naive_mf~base~list_duration@10[click].mean"></b> s to 38–55 s.
+      This is our clearest evidence that popularity and <span data-term="duration">duration</span> are coupled on KuaiRand.
+    </div>
+  </section>
+
+  <section id="problem"><h2>The problem it targets</h2>
+    <p>The target is <span data-term="popularity_bias">popularity bias</span>. In the <span data-term="standard_log">standard log</span>, the 20% most-exposed items (the <span data-term="head">head</span>) receive 76% of all training <span data-term="exposure">exposures</span>. A model trained on these rows sees popular videos clicked far more often.</p>
+    <p>The paper's causal reading has three parts:</p>
+    <ul>
+      <li><b>Popularity → exposure.</b> The platform's own recommender showed popular items more often.</li>
+      <li><b>Popularity → click.</b> Users click popular items partly because they are popular (the <span data-term="conformity">conformity effect</span>). The paper keeps this path: it is part of real user behaviour.</li>
+      <li><b>The problem.</b> Popularity is a common cause of both. The observed click rate of an item therefore mixes "this user likes it" with "this item was pushed and is popular". A standard model such as <span data-term="naive_mf">Naive MF</span> cannot separate the two and learns to rank popular items high for everyone. The paper calls this <i>bias amplification</i>.</li>
+    </ul>
+    <p><b>KuaiRand example.</b> Naive MF's <span data-term="topk">top-10 lists</span> are <b data-v="naive_mf~base~aplt@10" data-k="tailpct"></b>% <span data-term="tail">long-tail</span> items (<span data-term="aplt">APLT@10</span> = <span data-v="naive_mf~base~aplt@10"></span>). Their items average <span data-v="naive_mf~base~arp@10"></span> training exposures each. The pool average is about 152 (1,117,036 train rows ÷ 7,344 items).</p>
+    <p><b>The paper's twist.</b> Not all popularity is bad. Some items are popular because they are good or because they are trending now. So the paper first removes popularity (PD) and then adds back a chosen, "desired" popularity at inference (PDA).</p>
+  </section>
+
+  <section id="mechanism"><h2>How it works</h2>
+    <h3>Symbols</h3>
+    <dl class="kv">
+      <dt class="math">f(u, i)</dt><dd>The user-item matching score from the backbone: the MF <span data-term="logit">logit</span> (user bias + item bias + embedding dot product).</dd>
+      <dt>stage <span class="math">t</span></dt><dd>The training window is cut into 10 equal-time stages. Each training row belongs to the stage in which it was logged.</dd>
+      <dt class="math">m<sub>i</sub><sup>t</sup></dt><dd>The <span data-term="local_pop">local popularity</span> of item <span class="math">i</span> in stage <span class="math">t</span>: its share of that stage's exposures, scaled so that an item with an average share has <span class="math">m = 1</span>.</dd>
+      <dt class="math">m̃<sub>i</sub></dt><dd>The popularity used at inference: the item's local popularity in the <i>last</i> training stage.</dd>
+      <dt class="math">γ</dt><dd>The training exponent. It sets how much of the click signal the model may attribute to popularity. This is the <span data-term="knob">knob</span>.</dd>
+      <dt class="math">γ̃</dt><dd>The inference exponent. It sets how much popularity is added back at ranking time. PD uses γ̃ = 0; PDA uses γ̃ = γ, as the paper does.</dd>
+    </dl>
+
+    <h3>Training (same for PD and PDA)</h3>
+    <ol>
+      <li>Cut the training window into 10 equal-time stages. For every item and stage, count exposures and compute <span class="math">m<sub>i</sub><sup>t</sup></span>:
+        <div class="eq">m<sub>i</sub><sup>t</sup> = (c<sub>i</sub><sup>t</sup> + 1) ÷ (N<sub>t</sub> + n<sub>items</sub>) × n<sub>items</sub></div>
+        Here <span class="math">c<sub>i</sub><sup>t</sup></span> is the item's exposure count in stage <span class="math">t</span>, <span class="math">N<sub>t</sub></span> is the stage's total exposure count, and <span class="math">n<sub>items</sub></span> = 7,344. The "+1" keeps items with no exposures in a stage finite.</li>
+      <li>For each logged exposure of item <span class="math">i</span> to user <span class="math">u</span> in stage <span class="math">t</span>, predict the click logit as interest plus popularity:
+        <div class="eq">logit(u, i, t) = f(u, i) + γ · log m<sub>i</sub><sup>t</sup></div></li>
+      <li>Train with <span data-term="bce">BCE</span> on the click label, exactly as Naive MF. The popularity term has no parameters, so only <span class="math">f</span> learns. Because the popularity term already explains the popularity part of the click rate, <span class="math">f</span> is left with the rest. The paper calls this <span data-term="deconfound">deconfounding</span>.</li>
+    </ol>
+
+    <h3>Inference</h3>
+    <ol>
+      <li><b>PD:</b> rank items by <span class="math">f(u, i)</span> only.
+        <div class="eq">score<sub>PD</sub>(u, i) = f(u, i)</div>
+        The paper justifies this with <i>backdoor adjustment</i>: average the click probability over all popularity values instead of using the item's own popularity, <span class="math">P(c | do(u, i)) = Σ<sub>z</sub> P(c | u, i, z) P(z)</span>. "do(u, i)" means "as if the item had been shown regardless of its popularity". That average increases with <span class="math">f</span>, so ranking by <span class="math">f</span> is exact.</li>
+      <li><b>PDA:</b> add back last-stage popularity.
+        <div class="eq">score<sub>PDA</sub>(u, i) = f(u, i) + γ̃ · log m̃<sub>i</sub></div>
+        The extra term is the same for every user. It lifts items that were popular <i>recently</i>, not items that were popular over the whole window.</li>
+    </ol>
+
+    <h3>Our form versus the paper's</h3>
+    <p>The paper writes the click probability as a product, <span class="math">P(c = 1 | u, i, m) = ELU′(f) · m<sup>γ</sup></span>, and trains with BPR (a pairwise loss that ranks a clicked item above a sampled unclicked one). <span class="math">ELU′</span> is a function that keeps the interest score positive (<span class="math">e<sup>f</sup></span> for <span class="math">f ≤ 0</span>, else <span class="math">f + 1</span>).
+      Our pipeline trains every method with pointwise BCE on all logged exposures. So we apply the same product to the <i>odds</i> (probability ÷ (1 − probability)) instead:</p>
+    <div class="eq">odds(c = 1) = e<sup>f(u, i)</sup> · (m<sub>i</sub><sup>t</sup>)<sup>γ</sup> &nbsp;⇔&nbsp; logit = f(u, i) + γ · log m<sub>i</sub><sup>t</sup></div>
+    <p>The idea is unchanged: interest and popularity are separate factors, and popularity enters with the exponent γ. Only the scale the factors multiply on changes. PD's ranking by <span class="math">f</span> stays exact, because <span class="math">Σ<sub>z</sub> P(z) σ(f + γ log z)</span> increases with <span class="math">f</span>.</p>
+
+    <h3>What the knob does</h3>
+    <ul>
+      <li><b>γ = 0</b> (and γ̃ = 0): identical to Naive MF. We checked this: same calibration GAUC (0.54643) at the same best epoch (18).</li>
+      <li><b>Larger γ:</b> training attributes more of each item's click rate to popularity. PD then removes more popularity from the ranking. PDA adds back more of the last-stage popularity, because γ̃ = γ.</li>
+      <li>The paper searched γ in [0.02, 0.25]; we sweep six values in that range.</li>
+    </ul>
+  </section>
+
+  <section id="demo"><h2>Interactive demo</h2>
+    <div class="widget" id="toy">
+      <h3>Toy example: re-injecting recent popularity (made-up numbers)</h3>
+      <div class="controls">
+        <span>Mode:
+          <button type="button" id="toy-pd" class="on">PD (γ̃ = 0)</button>
+          <button type="button" id="toy-pda">PDA (γ̃ &gt; 0)</button></span>
+        <label>γ̃ <input type="range" id="toy-g" min="0" max="0.3" step="0.01" value="0.1"> <span class="readout" id="toy-g-out">0.10</span></label>
+        <span id="toy-note" class="rb-note"></span>
+      </div>
+      <div class="rb-table-wrap"><table class="toy-table">
+        <thead><tr><th>Video</th><th>Duration</th><th>Overall exposures</th><th>Last-stage m̃</th><th>log m̃</th><th>γ̃ · log m̃</th>
+          <th>f · user A</th><th>Score · user A</th><th>f · user B</th><th>Score · user B</th></tr></thead>
+        <tbody id="toy-body"></tbody>
+      </table></div>
+      <p class="rb-note">Bars: grey = interest score f; teal = popularity added by PDA; red hatching = popularity subtracted (items that were rare in the last stage, m̃ &lt; 1). Rank badges in teal mark each user's top 3.</p>
+      <div class="toy-lists" id="toy-lists"></div>
+      <p class="cap"><b>What to look at.</b> Start in PD: each user's top 3 is made of the videos that user likes most, so the two lists differ, and their videos are long (mean 177 s and 97 s). Switch to PDA and move γ̃ up. The term γ̃ · log m̃ is the same for both users. At about γ̃ = 0.1 it starts to outweigh the differences in interest, and the short videos that were popular in the last stage (Dance meme, Prank clip, Trending song) climb into both lists. From γ̃ = 0.2 both users get the same three videos, and the mean duration falls to 18 s. Note that "Trending song" has only 700 exposures overall. Recent popularity is not the same as overall popularity, which is why ARP (an overall measure) does not track PDA's shift exactly.</p>
+    </div>
+  </section>
+
+  <section id="family"><h2>Recommender family</h2>
+    <ol>
+      <li><b>Paper.</b> The paper uses one <span data-term="recommender_family">family</span>: a latent factor model, <span data-term="mf">MF</span> trained with BPR ("we choose the simple Matrix Factorization (MF) in this work"). It also applies the inference adjustment (but not the deconfounded training) to two other scorers, BPRMF-A and DICE-A, by replacing <span class="math">f</span> with their predictions. The paper reports no LightGCN, sequential or feature-based experiments.</li>
+      <li><b>Model-agnostic?</b> Yes in design. The paper separates <span class="math">f</span> from popularity so that the framework is "extendable to any <span data-term="cf">collaborative filtering</span> model that concerns user-item matching". It needs: a scalar user-item score <span class="math">f</span>, a timestamp on each training row (to assign stages), and item exposure (or interaction) counts per stage. It needs no side features and no extra parameters.</li>
+      <li><b>What we used.</b> The shared 64-dimensional MF backbone, trained with BCE on clicks: a CF model.</li>
+      <li><b>Other families (reasoning, not evidence).</b>
+        <ul>
+          <li><i>Graph CF (e.g. LightGCN):</i> the additive term plugs in unchanged, since LightGCN also outputs a dot-product score. One open point: graph propagation itself spreads popularity through high-degree nodes, and a single additive term may not absorb that.</li>
+          <li><i>Sequential models:</i> they already see recent behaviour, so some of what PDA re-injects may already be in <span class="math">f</span>. Stage-level popularity is also coarse next to a session-level model.</li>
+          <li><i>LLM-based recommenders:</i> PDA's inference step works on any per-item score or logit. PD's training step needs control of the training loss, i.e. fine-tuning with the extra term.</li>
+        </ul></li>
+    </ol>
+  </section>
+
+  <section id="impl"><h2>Our implementation</h2>
+    <h3>Knob grid</h3>
+    <p>γ ∈ {0.02, 0.05, 0.1, 0.15, 0.2, 0.25}. Each value runs twice: once as PD (γ̃ = 0) and once as PDA (γ̃ = γ). That is 12 <span data-term="sweep">sweeps</span> and 60 final runs. Every final run was evaluated on the <span data-term="test_split">test split</span> exactly once.</p>
+    <p>Model selection on the <span data-term="calibration">calibration split</span> scores the inference-time output: <span class="math">f</span> for PD and the adjusted score for PDA. The paper's Algorithm 1 does the same.</p>
+
+    <h3>Departures from the paper</h3>
+    <div class="rb-table-wrap"><table class="plain">
+      <thead><tr><th>Paper</th><th>Ours</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><span class="math">ELU′(f) · m<sup>γ</sup></span>, BPR loss</td><td><span class="math">logit = f + γ log m</span>, BCE on all logged exposures</td><td>Every method shares the pointwise BCE pipeline. The odds keep the paper's product form; PD's ranking stays exact.</td></tr>
+        <tr><td>Popularity from interactions (clicks)</td><td>Popularity from exposures</td><td>The confounding path is popularity → exposure, and the logs record exposures directly.</td></tr>
+        <tr><td>Raw share <span class="math">m = D<sub>i</sub><sup>t</sup> / Σ<sub>j</sub> D<sub>j</sub><sup>t</sup></span></td><td>Add-one smoothing, scaled by <span class="math">n<sub>items</sub></span></td><td>Items with no exposures in a stage need a finite <span class="math">log m</span>. The scaling puts an average item at <span class="math">log m = 0</span>.</td></tr>
+        <tr><td>Two forecasts of <span class="math">m̃</span>: (a) last stage, (b) linear trend</td><td>(a) only</td><td>Keeps one knob. Forecast (b) adds a second hyperparameter, α.</td></tr>
+        <tr><td>Test = the next time stage (popularity-biased)</td><td>Test = <span data-term="random_log">random-exposure log</span></td><td>Our whole study evaluates on random exposure. This is a large change for PDA: the paper's gains partly come from matching a test set that is itself popularity-biased.</td></tr>
+        <tr><td>γ step 0.02 over [0.02, 0.25]</td><td>Six values over the same range</td><td>Each value is a full sweep (9 tuning points and 5 seeds).</td></tr>
+      </tbody>
+    </table></div>
+    <p>Our training window is the <span data-term="guarded">guarded split</span> (8–21 April). Its last stage holds 27,619 of the 1,117,036 training rows, so <span class="math">m̃</span> rests on about 3.8 exposures per item on average.</p>
+
+    <h3>Diagnostics</h3>
+    <p>PD/PDA log no method-specific diagnostics (no weights, no propensities). Checks run for the PR:</p>
+    <ul>
+      <li>γ = γ̃ = 0 reproduces Naive MF exactly (calibration GAUC 0.54643, best epoch 18 at lr 1e-2, wd 1e-5).</li>
+      <li>Reloading the saved model and rescoring the calibration candidates matches the saved scores (max |Δ| = 0).</li>
+      <li>Unit tests check that each row gets its own stage's popularity, that the latest row falls in the last stage, and that items with no exposures stay finite.</li>
+    </ul>
+
+    <h3>Tuned learning rate and weight decay per sweep</h3>
+    <p>Rows marked <b>differs</b> picked a different lr / weight decay than Naive MF. Their results mix the method's effect with an optimisation change. This affects PD at γ = 0.25 and every PDA row from γ = 0.05 up.</p>
+    <div id="lr-table"></div>
+  </section>
+
+  <section id="results"><h2>Results</h2>
+    <p>Baseline: Naive MF trained on clicks. Each point is the mean of 5 seeds. Filled dots mark a significant <span data-term="delta">Δ</span>, meaning the <span data-term="boot_ci">paired bootstrap CI</span> excludes zero (<span data-term="sig">*</span>). Bars show the <span data-term="seed_std">seed std</span>. Hover a point for its numbers.</p>
+    <div class="chart-box" id="c-line">
+      <div class="chart-h">Metric against γ <span id="c-line-sel"></span></div>
+      <div id="c-line-plot"></div>
+      <p class="cap">What to look at: PD (blue) and PDA (teal) move in opposite directions on almost every metric. The jump between γ = 0.02 and 0.05 on the PDA curve coincides with the change of tuned lr. Try ARP, coverage, mean list duration and GAUC.</p>
+    </div>
+    <div class="chart-row">
+      <div class="chart-box"><div class="chart-h">Main trade-off: popularity vs click accuracy</div><div id="c-sc1"></div>
+        <p class="cap">What to look at: PD walks down-left (less popular, less accurate). PDA jumps up-right (more accurate, more popular), then drifts left as γ grows.</p></div>
+      <div class="chart-box"><div class="chart-h">Coupling: list duration vs watch-ratio accuracy</div><div id="c-sc2"></div>
+        <p class="cap">What to look at: PDA's accuracy gain comes with lists that are 23–41 s shorter. PD stays within 8 s of Naive MF up to γ = 0.2; its retuned γ = 0.25 point jumps to longer lists.</p></div>
+    </div>
+    <h3>Delta table</h3>
+    <div id="c-table"></div>
+    <p class="cap">What to look at: PD's columns are green on popularity and red on accuracy; PDA's are the reverse, plus large duration and calibration shifts. The <b>lr≠</b> flags mark rows tuned to a different learning rate.</p>
+  </section>
+
+  <section id="findings"><h2>Findings</h2>
+    <ul>
+      <li class="card finding"><b>Targeted: PD reduces popularity, monotonically up to γ = 0.2 (RQ1).</b>
+        ARP@10 falls from <span data-v="naive_mf~base~arp@10"></span> to <span data-v="pd~0.02~arp@10"></span> (γ = 0.02) and <span data-v="pd~0.2~arp@10"></span> (γ = 0.2, seed std <span data-v="pd~0.2~arp@10" data-k="std"></span>).
+        APLT@10 rises from <span data-v="naive_mf~base~aplt@10"></span> to <span data-v="pd~0.2~aplt@10"></span>, and <span data-term="rsp">RSP</span>_pop falls from <span data-v="naive_mf~base~rsp_pop@10"></span> to <span data-v="pd~0.2~rsp_pop@10"></span>. All Δ are significant.</li>
+      <li class="card finding"><b>Cost of PD: accuracy and diversity both fall.</b>
+        GAUC click drops by 0.0016 to 0.0187 as γ goes from 0.02 to 0.2 (seed std ≤ 0.0002), and GAUC <span data-term="watch_ratio">watch ratio</span> by 0.0025 to 0.0278.
+        Coverage@10 also falls (<span data-v="naive_mf~base~coverage@10"></span> → <span data-v="pd~0.2~coverage@10"></span>, about <span data-v="naive_mf~base~coverage@10" data-k="items"></span> → <span data-v="pd~0.2~coverage@10" data-k="items"></span> items), and <span data-term="entropy">exposure entropy</span> falls (<span data-v="naive_mf~base~exposure_entropy@10"></span> → <span data-v="pd~0.2~exposure_entropy@10"></span>). Lists get less popular, but fewer distinct items are shown.
+        Off-target: <span data-term="clickbait_share">clickbait share</span> rises from <span data-v="naive_mf~base~clickbait_share@10"></span> to about 0.10 for γ = 0.1–0.2 (γ = 0.1: <span data-v="pd~0.1~clickbait_share@10"></span> ± <span data-v="pd~0.1~clickbait_share@10" data-k="std"></span>).</li>
+      <li class="card finding"><b>PD at γ = 0.25 is a different model.</b>
+        Tuning picked lr <span data-v="pd~0.25~" data-k="lr"></span>, wd <span data-v="pd~0.25~" data-k="wd"></span> instead of Naive MF's lr 0.01, wd 1e-5. Coverage jumps to <span data-v="pd~0.25~coverage@10"></span> (± <span data-v="pd~0.25~coverage@10" data-k="std"></span>), entropy to <span data-v="pd~0.25~exposure_entropy@10"></span>, mean list duration to <span data-v="pd~0.25~list_duration@10[click].mean"></span> s, and ARP rises back to <span data-v="pd~0.25~arp@10"></span>.
+        Its GAUC click seed std is <span data-v="pd~0.25~gauc[click]" data-k="std"></span>, at least four times that of the other PD rows. The PD curve is therefore not monotone in γ; this point reflects the optimiser change as much as γ.</li>
+      <li class="card finding"><b>PDA (γ ≥ 0.05) gains accuracy under every label.</b>
+        GAUC click +0.011 to +0.013 (seed std about 0.0001), GAUC watch ratio +0.035 to +0.042, GAUC <span data-term="satisfaction">satisfaction</span> +0.03 to +0.05 (satisfaction rests on about 10% of users). γ = 0.02 stays close to Naive MF (GAUC click <span data-v="pda~0.02~gauc[click]" data-k="delta"></span>).
+        All PDA rows from γ = 0.05 were tuned to lr 0.001 (lr≠), so part of the step may come from the optimiser.</li>
+      <li class="card finding"><b>Targeted bias gets worse under PDA: lists collapse onto the recent head.</b>
+        APLT@10 is about 0 (<span data-v="pda~0.1~aplt@10"></span> at γ = 0.1). Coverage@10 is 0.004–0.005, i.e. about 28–38 distinct items across all 19,099 users. RSP_pop sits at its maximum of 2.0 and <span data-term="ckl">C_KL</span>_pop rises by 0.20–0.21.
+        ARP@10 rises most at γ = 0.05 (<span data-v="pda~0.05~arp@10" data-k="delta"></span>) and least at γ = 0.2 (<span data-v="pda~0.2~arp@10" data-k="delta"></span>). Likely because the items popular in the last stage are not always the most exposed overall, and ARP counts overall exposures.</li>
+      <li class="card finding"><b>Off-target, RQ3: PDA's popularity injection shortens the lists.</b>
+        <span data-term="list_dur">Mean list duration</span> falls from <span data-v="naive_mf~base~list_duration@10[click].mean"></span> s to <span data-v="pda~0.15~list_duration@10[click].mean"></span>–<span data-v="pda~0.1~list_duration@10[click].mean"></span> s for γ = 0.05–0.15 and to about 38 s for γ = 0.2–0.25 (seed std ≤ 3.9 s).
+        <span data-term="w1">W1</span> to the clicked items rises from <span data-v="naive_mf~base~wasserstein_duration@10[click]"></span> to 49–65 s, and C_KL_dur rises by up to <span data-v="pda~0.2~calibration_kl_dur@10" data-k="delta"></span>.
+        PD moves duration much less: −1 to −8 s up to γ = 0.2.</li>
+      <li class="card finding"><b>Off-target: clickbait and user groups.</b>
+        PDA drives clickbait share to 0 (Δ <span data-v="pda~0.1~clickbait_share@10" data-k="delta"></span>). It narrows the <span data-term="ndcg_gap">NDCG gap</span> between activity groups from <span data-v="naive_mf~base~ndcg_by_group@10[click|activity].gap"></span> to <span data-v="pda~0.25~ndcg_by_group@10[click|activity].gap"></span> (γ = 0.25).
+        For PD (γ ≤ 0.2) all group gaps stay within user-sampling noise. Both <span data-term="mainstream">mainstream</span> and non-mainstream users lose about the same NDCG (γ = 0.2: <span data-v="pd~0.2~ndcg_by_group@10[click|mainstream].high" data-k="delta"></span> vs <span data-v="pd~0.2~ndcg_by_group@10[click|mainstream].low" data-k="delta"></span>).</li>
+    </ul>
+  </section>
+
+  <section id="discussion"><h2>Discussion</h2>
+    <p><b>Why PD costs accuracy here.</b> PD's training term <span class="math">γ log m<sup>t</sup></span> absorbs the click-rate advantage that goes with popularity. Ranking by <span class="math">f</span> alone then demotes items whose clicks were explained by popularity. On the random-exposure test, those items are still clicked more, so accuracy drops. Likely because much of KuaiRand's popularity is the "benign" kind the paper itself describes (quality, conformity), which also holds under random exposure. Two side effects follow (interpretation). First, coverage falls: the lists move to a small set of mid-popularity items whose <span class="math">f</span> is high for everyone. Second, clickbait share rises: clickbait items have high click rates for their popularity, and "clicks beyond popularity" is exactly what <span class="math">f</span> keeps.</p>
+    <p><b>Why PDA gains accuracy but collapses the lists.</b> The term <span class="math">γ̃ log m̃<sub>i</sub></span> is the same for every user. From γ ≈ 0.05 it outweighs most user-specific differences in <span class="math">f</span>, so nearly every user gets the same ~30 recently popular videos (see the demo). These videos are clicked and finished more often even under random exposure, which gives the accuracy gain. Likely because the random log starts on 22 April, right after the last training stage, so last-stage popularity is a good short-term forecast. The watch-ratio gain (about +0.04) is three times the click gain (about +0.012). That fits short videos, which are easier to watch to the end.</p>
+    <p><b>Research questions.</b> <i>RQ1:</i> PD reduces its own bias; PDA increases it, by design. <i>RQ2:</i> PD raises clickbait share and lowers coverage; PDA lowers clickbait share and narrows the activity gap but destroys coverage. <i>RQ3:</i> PDA is the clearest evidence of <span data-term="coupling">bias coupling</span> in the panel. Re-injecting popularity cuts mean list duration by 23–41 s, because the recently popular videos it lifts are short. In the training data, the 200 most-exposed items have a median duration of 67 s, against 81 s for the pool. Across the whole pool, the rank correlation between recent popularity and duration is weak (about −0.04, from the data facts), so the coupling sits in the head rather than across all items. This is the reverse direction of H1: a popularity correction moves duration. <i>H3:</i> not supported for PD at γ ≤ 0.2. Mainstream and non-mainstream users lose about equally, and the gap does not widen. Under PDA (γ ≥ 0.05), non-mainstream users gain about +0.012 to +0.015 NDCG@10, while mainstream users change less (−0.004 to +0.005). <i>RQ4:</i> in the ARP–GAUC plane, PD traces a frontier that trades accuracy for lower popularity. PDA at γ = 0.02 is slightly better than Naive MF on both ARP and GAUC click, but the effects are tiny (ARP −4, GAUC +0.0009). PDA at γ ≥ 0.05 is the most accurate click-trained setting on this page, at the cost of the least diverse lists.</p>
+    <p><b>Open questions.</b> (1) How much of PDA's accuracy step survives if the lr is fixed at Naive MF's 0.01? (2) Would a version with both popularity and duration as confounders keep PD's popularity reduction without the clickbait rise, or keep PDA's accuracy without the short-video collapse?</p>
+  </section>
+
+  <section id="caveats"><h2>Caveats</h2>
+    <ul>
+      <li>The bootstrap CIs of set metrics (coverage, entropy, <span data-term="gini">Gini</span>) are biased.</li>
+      <li>There is no multiple-comparison correction across the panel.</li>
+      <li><code>*</code> covers user sampling only, not seed variance. Read it together with the seed std.</li>
+      <li>Satisfaction cells rest on about 10% of test users.</li>
+      <li><b>Optimiser confound.</b> PD at γ = 0.25 and PDA at γ ≥ 0.05 use a different tuned lr / wd than Naive MF. Their Δ mixes the method with the optimisation change.</li>
+      <li><b>Sparse forecast.</b> <span class="math">m̃</span> comes from the last stage only (27,619 rows, about 3.8 exposures per item). The paper's trend forecast (b) was not tried.</li>
+      <li><b>Different test regime from the paper.</b> The paper tests on the next time stage, whose popularity matches the forecast. We test on random exposure. PDA's accuracy gains here likely also depend on the random log starting right after the training window.</li>
+      <li><b>ARP measures overall popularity,</b> not last-stage popularity. It understates how concentrated PDA's lists are; APLT, coverage and RSP_pop show it better.</li>
+      <li>Several PDA rows have seed std ≈ 0 on list metrics (e.g. C_KL_pop, RSP_pop). All seeds recommend nearly the same items, so seed variance there says little about robustness.</li>
+    </ul>
+  </section>
+
+  <footer>Data: test split, 19,099 users, 5 seeds per setting. Generated from outputs/sweeps via assets/data.js.</footer>
+</main></div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fmtN = (v, d) => v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+  // ---------- numbers in prose: data-v="method~knob~metric", data-k = val|delta|std|items|tailpct|lr|wd ----------
+  const hp = (x) => (x !== 0 && x < 1e-3 ? x.toExponential() : String(x));
+  document.querySelectorAll("[data-v]").forEach((n) => {
+    const [m, k, key] = n.dataset.v.split("~");
+    const rec = k === "base" ? RB.find(m, null) : RB.find(m, k);
+    const kind = n.dataset.k || "val";
+    if (!rec) { n.textContent = "?"; console.error("no record", n.dataset.v); return; }
+    if (kind === "lr" || kind === "wd") { n.textContent = hp(rec[kind]); return; }
+    const d = n.dataset.d != null ? Number(n.dataset.d) : RB.info(key).digits;
+    let v;
+    if (kind === "val") v = RB.val(rec, key);
+    else if (kind === "std") v = RB.std(rec, key);
+    else if (kind === "delta") v = RB.delta(rec, key);
+    else if (kind === "items") { n.textContent = fmtN(RB.val(rec, key) * 7344, 0); return; }
+    else if (kind === "tailpct") { n.textContent = fmtN(RB.val(rec, key) * 100, 1); return; }
+    if (!Number.isFinite(v)) { n.textContent = "?"; console.error("no value", n.dataset.v, kind); return; }
+    n.textContent = (kind === "delta" && v >= 0 ? "+" : "") + fmtN(v, d).replace("-", "−");
+  });
+
+  // ---------- lr / wd table ----------
+  (function () {
+    const base = RB.find("naive_mf", null);
+    const rows = [base, ...RB.sweeps("pd"), ...RB.sweeps("pda")].map((r) => {
+      const diff = r !== base && (r.lr !== base.lr || r.wd !== base.wd);
+      const name = r === base ? "Naive MF" : `${RB.methodName(r.method)} · ${RB.knobLabel(r.method, r.knob)}${r.method === "pda" ? " = γ̃" : ""}`;
+      return `<tr><td>${name}</td><td class="num">${hp(r.lr)}</td><td class="num">${hp(r.wd)}</td><td>${r === base ? "baseline" : diff ? "<b style=\"color:#b45309\">differs</b>" : "same"}</td></tr>`;
+    }).join("");
+    $("lr-table").innerHTML = `<div class="rb-table-wrap"><table class="plain"><thead><tr><th>Setting</th><th>tuned lr</th><th>tuned weight decay</th><th>vs Naive MF</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  })();
+
+  // ---------- charts ----------
+  const lineKeys = ["gauc[click]", "gauc[watch_ratio]", "gauc[satisfaction]", "ndcg@10[click]",
+    "arp@10", "aplt@10", "gini@10", "rsp_pop@10", "calibration_kl_pop@10",
+    "coverage@10", "exposure_entropy@10",
+    "list_duration@10[click].mean", "wasserstein_duration@10[click]", "rsp_dur@10", "calibration_kl_dur@10",
+    "clickbait_share@10",
+    "ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|mainstream].gap",
+    "ndcg_by_group@10[click|mainstream].high", "ndcg_by_group@10[click|mainstream].low"];
+  RB.metricSelect($("c-line-sel"), lineKeys, "arp@10", (k) => RB.lineChart($("c-line-plot"), {
+    methods: ["pd", "pda"], metric: k, height: 340, xlabel: "γ — PD: γ̃ = 0 · PDA: γ̃ = γ",
+    tipMetrics: ["gauc[click]", "arp@10", "list_duration@10[click].mean"].filter((x) => x !== k),
+  }));
+  RB.scatter($("c-sc1"), { methods: ["pd", "pda"], x: "arp@10", y: "gauc[click]", baselines: ["naive_mf"], height: 360,
+    tipMetrics: ["coverage@10", "list_duration@10[click].mean"] });
+  RB.scatter($("c-sc2"), { methods: ["pd", "pda"], x: "list_duration@10[click].mean", y: "gauc[watch_ratio]", baselines: ["naive_mf"], height: 360,
+    tipMetrics: ["wasserstein_duration@10[click]", "arp@10"] });
+  RB.deltaTable($("c-table"), { methods: ["pd", "pda"], metrics: [
+    "gauc[click]", "gauc[watch_ratio]", "arp@10", "aplt@10", "coverage@10", "exposure_entropy@10",
+    "list_duration@10[click].mean", "wasserstein_duration@10[click]", "calibration_kl_dur@10",
+    "clickbait_share@10", "ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|mainstream].gap"] });
+
+  // ---------- toy demo (fixed, made-up numbers) ----------
+  const ITEMS = [
+    { name: "Cooking tutorial", dur: 140, exp: 900, m: 0.6, fA: 1.10, fB: 0.60 },
+    { name: "Long vlog", dur: 210, exp: 300, m: 0.3, fA: 1.05, fB: 0.75 },
+    { name: "Dance meme", dur: 15, exp: 4200, m: 60, fA: 0.80, fB: 0.70 },
+    { name: "Prank clip", dur: 22, exp: 3000, m: 40, fA: 0.70, fB: 0.80 },
+    { name: "News recap", dur: 75, exp: 1500, m: 3, fA: 0.95, fB: 1.05 },
+    { name: "Trending song", dur: 18, exp: 700, m: 80, fA: 0.60, fB: 0.55 },
+    { name: "Tech review", dur: 180, exp: 500, m: 1, fA: 1.00, fB: 1.10 },
+    { name: "Pet clip", dur: 35, exp: 2600, m: 8, fA: 0.85, fB: 0.95 },
+  ];
+  const SMAX = 2.2; // bar scale (score units)
+  let mode = "pd";
+  const gEl = $("toy-g"), gOut = $("toy-g-out");
+  const rankBy = (scores) => { const order = scores.map((s, i) => i).sort((a, b) => scores[b] - scores[a]); const r = []; order.forEach((i, k) => (r[i] = k + 1)); return { order, r }; };
+  const top3 = (fk, g) => rankBy(ITEMS.map((it) => it[fk] + g * Math.log(it.m))).order.slice(0, 3);
+  const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  const listSummary = (idx) => ({ dur: mean(idx.map((i) => ITEMS[i].dur)), exp: mean(idx.map((i) => ITEMS[i].exp)), m: mean(idx.map((i) => ITEMS[i].m)) });
+  const PDref = { A: listSummary(top3("fA", 0)), B: listSummary(top3("fB", 0)) };
+  function bar(f, p) {
+    const w = (x) => (Math.max(0, x) / SMAX) * 100;
+    if (p >= 0) return `<div class="toy-bar"><i class="f" style="width:${w(f)}%"></i><i class="up" style="left:${w(f)}%;width:${w(p)}%"></i></div>`;
+    return `<div class="toy-bar"><i class="f" style="width:${w(f + p)}%"></i><i class="down" style="left:${w(f + p)}%;width:${w(-p)}%"></i></div>`;
+  }
+  function render() {
+    const g = mode === "pd" ? 0 : Number(gEl.value);
+    gEl.disabled = mode === "pd";
+    gOut.textContent = g.toFixed(2);
+    $("toy-note").textContent = mode === "pd" ? "PD ranks by f only, so γ̃ is fixed at 0." : "PDA: score = f + γ̃ · log m̃ (the paper sets γ̃ = γ).";
+    $("toy-pd").classList.toggle("on", mode === "pd");
+    $("toy-pda").classList.toggle("on", mode === "pda");
+    const sA = ITEMS.map((it) => it.fA + g * Math.log(it.m)), sB = ITEMS.map((it) => it.fB + g * Math.log(it.m));
+    const rA = rankBy(sA), rB = rankBy(sB);
+    const badge = (r) => `<span class="rank ${r <= 3 ? "top" : ""}">#${r}</span>`;
+    $("toy-body").innerHTML = ITEMS.map((it, i) => {
+      const p = g * Math.log(it.m);
+      return `<tr><td>${it.name}</td><td>${it.dur} s</td><td>${it.exp.toLocaleString("en-US")}</td><td>${it.m}</td><td>${Math.log(it.m).toFixed(2)}</td><td>${(p >= 0 ? "+" : "") + p.toFixed(2)}</td>
+        <td>${it.fA.toFixed(2)}</td><td class="sc">${sA[i].toFixed(2)} ${badge(rA.r[i])}${bar(it.fA, p)}</td>
+        <td>${it.fB.toFixed(2)}</td><td class="sc">${sB[i].toFixed(2)} ${badge(rB.r[i])}${bar(it.fB, p)}</td></tr>`;
+    }).join("");
+    const card = (label, order, ref) => {
+      const idx = order.slice(0, 3), s = listSummary(idx);
+      return `<div class="toy-list"><h4>${label} · top 3</h4><ol>${idx.map((i) => `<li>${ITEMS[i].name} (${ITEMS[i].dur} s)</li>`).join("")}</ol>
+        <div>Mean duration: <span class="readout">${s.dur.toFixed(0)} s</span> <span class="ref">(PD: ${ref.dur.toFixed(0)} s)</span></div>
+        <div>Mean overall exposures: <span class="readout">${Math.round(s.exp).toLocaleString("en-US")}</span> <span class="ref">(PD: ${Math.round(ref.exp).toLocaleString("en-US")})</span></div>
+        <div>Mean last-stage m̃: <span class="readout">${s.m.toFixed(1)}</span> <span class="ref">(PD: ${ref.m.toFixed(1)})</span></div></div>`;
+    };
+    const a3 = rA.order.slice(0, 3), b3 = rB.order.slice(0, 3);
+    const shared = a3.filter((i) => b3.includes(i)).length;
+    const distinct = new Set([...a3, ...b3]).size;
+    $("toy-lists").innerHTML = card("User A", rA.order, PDref.A) + card("User B", rB.order, PDref.B) +
+      `<div class="toy-list"><h4>Both users</h4><div>Videos in both top-3 lists: <span class="readout">${shared} of 3</span></div>
+        <div>Distinct videos shown (toy coverage): <span class="readout">${distinct} of ${ITEMS.length}</span></div>
+        <div class="ref" style="margin-top:6px">The popularity term is shared by all users, so a large γ̃ pushes everyone toward the same list.</div></div>`;
+  }
+  $("toy-pd").addEventListener("click", () => { mode = "pd"; render(); });
+  $("toy-pda").addEventListener("click", () => { mode = "pda"; render(); });
+  gEl.addEventListener("input", render);
+  render();
+})();
+</script>
+</body></html>

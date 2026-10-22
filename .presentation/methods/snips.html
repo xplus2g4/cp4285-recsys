@@ -1,0 +1,453 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SNIPS — debiasing trade-offs</title>
+<link rel="stylesheet" href="../assets/style.css">
+<script src="../assets/data.js"></script><script src="../assets/glossary.js"></script><script src="../assets/charts.js"></script>
+<style>
+  .demo-grid { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 16px; align-items: start; }
+  @media (max-width: 1000px) { .demo-grid { grid-template-columns: 1fr; } }
+  .demo-svg { width: 100%; height: auto; display: block; background: #fff; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; }
+  .demo-h { font-size: 13.5px; font-weight: 600; color: #334155; margin: 2px 2px 4px; }
+  .demo-read dl.kv { font-size: 13.5px; }
+  .demo-read .ips { color: #15803d; font-weight: 700; } .demo-read .sn { color: #4d7c0f; font-weight: 700; }
+  .btn-group button { margin-right: 4px; }
+  .cmp td.num, .cmp th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cmp td .sd { font-size: 11.5px; color: var(--muted); }
+  .cmp td.lower { color: var(--good); font-weight: 700; } .cmp td.higher { color: var(--bad); font-weight: 700; }
+  .chart-box + .chart-box, .grid2 + .chart-box, .chart-box + .grid2 { margin-top: 16px; }
+  .chk { font-weight: 500; font-size: 13.5px; color: #334155; }
+</style>
+</head><body><div class="page">
+<nav class="toc"><a class="home" href="../index.html">← Overview</a>
+  <a href="#summary">Summary</a><a href="#problem">Problem</a><a href="#mechanism">How it works</a>
+  <a href="#demo">Interactive demo</a><a href="#family">Recommender family</a><a href="#impl">Our implementation</a>
+  <a href="#results">Results</a><a href="#findings">Findings</a><a href="#discussion">Discussion</a><a href="#caveats">Caveats</a></nav>
+<main>
+  <h1>SNIPS</h1><p class="subtitle">The Self-Normalized Estimator for Counterfactual Learning — Swaminathan &amp; Joachims, NeurIPS 2015 (used in recommendation by Schnabel et al., ICML 2016)</p>
+
+  <section id="summary">
+    <p>
+      <span class="pill exp">Exposure bias</span><span class="pill pop">via a popularity propensity</span>
+      <span class="pill stage">loss reweighting</span><span class="pill stage">training loss</span>
+      <span class="pill fam">model-agnostic · MF backbone (CF)</span>
+    </p>
+    <p>SNIPS is <a href="ips-pop.html">IPS-pop</a> with one change. Both weight each training row by its <span data-term="ipw">inverse propensity weight</span> to correct <span data-term="exposure_bias">exposure bias</span>. IPS-pop averages the weighted loss over the rows of a batch. SNIPS divides it by the sum of the weights in the batch instead (<span data-term="self_norm">self-normalisation</span>). In the paper this division stops the learner from lowering its loss by shrinking the weights. Our weights do not depend on the model, so that cannot happen here, and the two losses are identical over the full training set. They differ only in how much each mini-batch moves the model.</p>
+    <div class="card callout">
+      <h3 style="margin-top:0">Headline result</h3>
+      <p style="margin:0">SNIPS reproduces IPS-pop. Tuning picks the same learning rate and weight decay at every clip. Accuracy differs by at most 0.0004. The largest list-level difference is 22 <span data-term="arp">ARP@10</span> points at clip 1000, against a <span data-term="seed_std">seed std</span> of 23–52. The only visible change is a lower seed std of popularity list metrics at clip 1000 (ARP@10 std 52 → 23). That drop comes from one of the five seeds, so it is suggestive only.</p>
+    </div>
+  </section>
+
+  <section id="problem"><h2>The problem it targets</h2>
+    <p>SNIPS targets no new bias. It targets a weakness of the IPS fix for exposure bias: <b>variance</b>.</p>
+    <ul>
+      <li>The <span data-term="standard_log">standard log</span> is skewed by the old recommender. In KuaiRand, the <span data-term="head">head</span> (20% of items) receives <span id="p-head"></span> of training <span data-term="exposure">exposures</span>.</li>
+      <li>IPS-pop corrects this by giving each row the weight 1 ÷ <span data-term="propensity">propensity</span>, where the propensity comes from the item's training exposure count (its <span data-term="pop">popularity</span>). A rarely shown <span data-term="tail">long-tail item</span> gets a large weight. Unclipped, the largest weight is <span id="p-maxw"></span> times the average weight.</li>
+      <li>A loss built from such weights is noisy. Its value, and the size of each gradient step, depends on which rare rows happen to be in the sample. The <span data-term="clip">clip</span> caps the weights to limit this, at the cost of a weaker correction.</li>
+    </ul>
+    <p><b>The paper's problem is sharper than variance.</b> It studies learning from logged <i>bandit feedback</i>: an old policy chose one action per context (for example one label set per document), and the log records that action, its probability p<sub>i</sub> and its loss δ<sub>i</sub>. The learner is a new stochastic policy h. The IPS estimate of its loss is</p>
+    <div class="eq">R̂<sub>IPS</sub>(h) = (1/n) · Σ<sub>i</sub> δ<sub>i</sub> · h(y<sub>i</sub> | x<sub>i</sub>) / p<sub>i</sub></div>
+    <p>Here x<sub>i</sub> is the context, y<sub>i</sub> the logged action, and h(y<sub>i</sub> | x<sub>i</sub>) the probability the <i>new</i> policy gives that action. The weight h/p contains the policy being learned. So the learner has a cheap way to lower R̂: if all losses are positive, it can give less probability to every logged action. That shrinks all weights at once without finding better actions. The paper calls this <b>propensity overfitting</b> (a term not in our glossary: the learner fits the weights instead of the losses). A symptom is that adding a constant to every loss changes which policy wins. On one dataset (TMC) the IPS learner, trained with positive losses, became worse than random.</p>
+    <p><b>Why this does not apply to us.</b> Our weight is 1/p<sub>i</sub> with p<sub>i</sub> fixed by item popularity. The <span data-term="mf">MF</span> score enters only the <span data-term="bce">BCE</span> term, never the weight. The model cannot change the sum of the weights, so there is no propensity overfitting for SNIPS to cure. What remains is the variance of mini-batch steps.</p>
+  </section>
+
+  <section id="mechanism"><h2>How it works</h2>
+    <h3>Training</h3>
+    <ol>
+      <li><b>Propensity</b> (same as IPS-pop): p<sub>i</sub> = n<sub>i</sub> / max<sub>j</sub> n<sub>j</sub>, where n<sub>i</sub> is item i's number of training exposures.</li>
+      <li><b>Weight</b> (same as IPS-pop): w = 1/p, rescaled so the smallest weight is 1, capped at clip, then divided by the training-set mean. So the weights average exactly 1 over the training set.</li>
+      <li><b>Loss</b> (the only change). For a mini-batch b of B rows, with per-row loss ℓ<sub>r</sub> = BCE(<span data-term="logit">logit</span>, click):
+        <div class="eq">IPS-pop: &nbsp; L<sub>IPS</sub>(b) = (1/B) · Σ<sub>r∈b</sub> w<sub>r</sub> ℓ<sub>r</sub><br>
+        SNIPS: &nbsp; L<sub>SN</sub>(b) = Σ<sub>r∈b</sub> w<sub>r</sub> ℓ<sub>r</sub> / Σ<sub>r∈b</sub> w<sub>r</sub> &nbsp;=&nbsp; L<sub>IPS</sub>(b) / s<sub>b</sub>, &nbsp; where s<sub>b</sub> = (1/B) · Σ<sub>r∈b</sub> w<sub>r</sub></div>
+        s<sub>b</sub> is the mean weight of the batch. SNIPS's batch loss is a weighted average of the row losses, so it always lies between the smallest and largest ℓ<sub>r</sub>. IPS-pop's batch loss is that same average multiplied by s<sub>b</sub>. A batch that draws a few very large weights has s<sub>b</sub> &gt; 1 and takes a larger step under IPS-pop. Under SNIPS every batch has total step scale 1.</li>
+      <li><b>Optimiser and selection</b> (same as every method): Adam on mini-batches of 8,192 rows, with early stopping on the <span data-term="calibration">calibration split</span>.</li>
+    </ol>
+    <h3>Why the two share a minimiser</h3>
+    <p>Over the whole training set (N rows), Σ w = N, because the weights average 1. So the full-data SNIPS loss Σ wℓ / Σ w equals the full-data IPS loss (1/N) Σ wℓ. They are the same objective, not just proportional. In the paper the denominator Ŝ(h) = (1/n) Σ h(y<sub>i</sub>|x<sub>i</sub>)/p<sub>i</sub> moves with the policy, which is why self-normalisation changes the answer there. The paper treats Ŝ as a <i>control variate</i> (a quantity with known expectation, here 1, used to cancel part of the noise in an estimate).</p>
+    <p>Strictly, the mini-batch SNIPS loss is a ratio. Its expected gradient differs from the full-data gradient by a term that shrinks as the batch grows. <i>Interpretation:</i> at B = 8,192 we expect this to be small (see the diagnostics in <a href="#impl">Our implementation</a>).</p>
+    <h3>Inference</h3>
+    <p>Unchanged: rank items by the MF score. SNIPS acts only at training time.</p>
+    <h3>The knob</h3>
+    <p>The <span data-term="knob">knob</span> is clip, the largest allowed ratio between any two weights, as for IPS-pop.</p>
+    <ul>
+      <li><b>clip = 1:</b> every weight is 1. Both losses reduce to plain BCE, i.e. <span data-term="naive_mf">Naive MF</span>, and are identical.</li>
+      <li><b>Larger clip:</b> the weights spread out, s<sub>b</sub> varies more between batches, and SNIPS and IPS-pop can drift apart.</li>
+      <li><b>clip = ∞:</b> raw inverse-propensity weights. The largest possible difference between the two.</li>
+    </ul>
+  </section>
+
+  <section id="demo"><h2>Interactive demo</h2><div class="widget">
+    <h3>Toy example (made-up numbers): one epoch of mini-batches under IPS-pop and SNIPS</h3>
+    <p style="margin-top:0;font-size:14.5px">160 toy rows with long-tailed weights (a fixed grid from a Pareto-like distribution; largest raw ratio about 1,350) and random per-row losses (seeded generator). The rows are shuffled and cut into batches, as in training.</p>
+    <div class="controls">
+      <label>clip <input id="d-clip" type="range" min="0" max="7" step="1" value="6"> <span class="readout" id="d-clip-v"></span></label>
+      <span class="btn-group">batch size B: <button data-b="4">4</button><button data-b="8">8</button><button data-b="16">16</button></span>
+      <span class="btn-group">batch order: <button data-o="1">1</button><button data-o="2">2</button><button data-o="3">3</button></span>
+    </div>
+    <div class="demo-grid">
+      <div>
+        <div class="demo-h">A. Total step scale per batch. IPS-pop: s<sub>b</sub> = mean weight in the batch (bars). SNIPS: always 1 (dashed line). Click a bar to inspect that batch.</div>
+        <svg id="d-a" class="demo-svg" viewBox="0 0 640 190"></svg>
+        <div class="demo-h">B. Batch loss estimate. ● IPS-pop = (1/B)·Σwℓ, ◆ SNIPS = Σwℓ / Σw. Solid line: full-data weighted loss (the same for both).</div>
+        <svg id="d-b" class="demo-svg" viewBox="0 0 640 190"></svg>
+        <div class="demo-h">C. Selected batch: each row's share of the step. Same proportions in both; only the total differs.</div>
+        <svg id="d-c" class="demo-svg" viewBox="0 0 640 112"></svg>
+      </div>
+      <div class="demo-read" id="d-read"></div>
+    </div>
+    <p><b>What to look at.</b> Move clip from 1 to ∞. At clip 1 the bars all sit on the dashed line: both losses are plain BCE. As clip grows, a few batches draw a very large weight and their IPS-pop bar shoots up, so those batches take a much larger step. SNIPS keeps every batch at 1. Panel C shows that SNIPS keeps the same proportions between the rows of a batch and only rescales the total. The average step scale over the epoch is exactly 1 for both, and the average IPS-pop batch loss equals the full-data loss exactly. The SNIPS batch losses spread much less, but at high clip their average sits off the full-data line. That is SNIPS's small-sample bias: unclipped, one toy row holds a large share of all the weight, yet under SNIPS its batch counts as just one batch. A larger B narrows the IPS-pop bars (try B = 16). Real training uses B = 8,192, where even the largest weight is about 2% of a batch's weight sum and the batch mean weight has a std of only about 3% even unclipped, which is why SNIPS and IPS-pop end up so close.</p>
+  </div></section>
+
+  <section id="family"><h2>Recommender family</h2>
+    <ol>
+      <li><b>Paper.</b> Swaminathan &amp; Joachims did not use a recommender. Their learner is a stochastic policy over label sets: exponential-family linear rules, of the same form as a conditional random field (CRF). They test it on four multi-label classification datasets (Scene, Yeast, TMC, LYRL) converted to simulated bandit feedback, with known propensities, and optimise with L-BFGS. Their method, Norm-POEM, also adds a variance penalty, which we do not use. Schnabel et al. (2016) brought SNIPS into recommendation, but only as an <i>evaluation</i> estimator (their Eq. 11, on semi-synthetic MovieLens 100K). Their trained model, MF-IPS, uses plain IPS.</li>
+      <li><b>Model-agnostic.</b> SNIPS needs only a per-row loss and a per-row weight. It takes nothing from the <span data-term="backbone">backbone</span> beyond its loss. It requires propensities; IPS-pop takes them from item popularity counts.</li>
+      <li><b>What we used.</b> The shared 64-dimensional MF backbone, a <span data-term="cf">collaborative filtering</span> model, trained with BCE on clicks.</li>
+      <li><b>Other families</b> <i>(reasoning, not evidence)</i>. Any model trained on mini-batches of weighted per-row losses can use the same one-line change: graph CF such as LightGCN with a pointwise loss, sequential models, or fine-tuned LLM recommenders. The size of the effect depends on how much the batch weight sum varies, so smaller batches or heavier-tailed propensities would make SNIPS differ more from IPS. With pairwise (BPR) or sampled-softmax losses it is less clear which weight sum should be normalised.</li>
+    </ol>
+  </section>
+
+  <section id="impl"><h2>Our implementation</h2>
+    <ul>
+      <li><b>Code.</b> <code>recommenders/snips.py</code> subclasses IPS-pop and overrides only the loss: <code>(per_row * weight).sum() / weight.sum()</code>. Propensities, weights, clipping and diagnostics are inherited unchanged (spec §13.4).</li>
+      <li><b>Knob grid:</b> clip ∈ {10, 30, 100, 300, 1000, ∞}, the IPS-pop grid. Each value is its own <span data-term="sweep">sweep</span>.</li>
+      <li><b>Data:</b> trained on clicks from the <span data-term="guarded">guarded split</span> of the standard log; evaluated on the <span data-term="test_split">test split</span> of the <span data-term="random_log">random-exposure log</span>.</li>
+    </ul>
+    <h3>Departures from the paper</h3>
+    <ul>
+      <li><b>Per-batch normaliser.</b> The paper normalises over the whole sample. Over our whole training set the normaliser is a constant, so a full-sample SNIPS would be IPS-pop exactly. The per-batch normaliser is the only place where SNIPS can differ here.</li>
+      <li><b>Fixed, model-free propensities.</b> The paper's weight h/p contains the learned policy; ours is 1/p from item popularity. This removes the propensity-overfitting problem the paper was written to fix.</li>
+      <li><b>No variance regulariser and no L-BFGS.</b> Norm-POEM adds a variance penalty and is trained full-batch with L-BFGS. We keep every method on the same backbone, Adam and mini-batches, so only the loss changes.</li>
+      <li><b>Clip defined as a ratio.</b> The paper caps h/p at M. Our clip caps the ratio of the largest to the smallest weight, and the weights are then normalised to mean 1, as for IPS-pop.</li>
+    </ul>
+    <h3>Diagnostics (identical to IPS-pop, because the weights are identical)</h3>
+    <div id="diag-table"></div>
+    <p class="rb-note">ESS share: <span data-term="ess">effective sample size share</span>. Max w: largest weight after normalising to mean 1. Clipped: share of training rows whose weight hit the cap. Last column (our calculation, not logged): the expected batch-to-batch std of the batch mean weight s<sub>b</sub>, √((1/ESS − 1) / 8,192), assuming rows land in batches at random. It is the size of the per-step difference between IPS-pop and SNIPS.</p>
+    <p><b>Tuned lr / wd.</b> Tuning picks the same point for SNIPS and IPS-pop at every clip: lr 1e-2 at clip 10–30, lr 1e-3 from clip 100 up, always wd 1e-5. Naive MF uses lr 1e-2, wd 1e-5. So the SNIPS-vs-IPS-pop comparison is clean at every clip. Against Naive MF, the rows at clip ≥ 100 (marked lr≠ in the table) mix the reweighting with a learning-rate change.</p>
+    <p><b>Seeds.</b> The two methods are paired by seed. At clip 10 and 30, each SNIPS seed reproduces its IPS-pop twin to within 0.5 ARP points (see the seed chart below).</p>
+  </section>
+
+  <section id="results"><h2>Results</h2>
+    <div class="chart-box">
+      <div class="chart-h">IPS-pop vs SNIPS across clip <span id="lc-sel"></span> <label class="chk"><input type="checkbox" id="lc-base"> show Naive MF line</label></div>
+      <div id="lc"></div>
+      <p class="cap">Look for any gap between the two curves. They overlap at every clip on almost every metric; the gaps at clip 300–1000 on ARP@10 and APLT@10 are smaller than the seed-std bars. Filled dots: Δ vs Naive MF is significant.</p>
+    </div>
+
+    <div class="chart-box">
+      <div class="chart-h">Every seed, IPS-pop (left) vs SNIPS (right) at each clip <span id="sd-sel"></span></div>
+      <div id="sd"></div>
+      <p class="cap">Grey lines join the same seed. Look at clip 1000: four seeds barely move, one IPS-pop seed sits far above its SNIPS twin. That single seed explains the halved seed std. At clip 300 the pattern runs the other way for a different seed.</p>
+    </div>
+
+    <h3>Seed std, IPS-pop → SNIPS</h3>
+    <div id="std-table"></div>
+    <p class="rb-note">Each cell: seed std over 5 seeds, IPS-pop → SNIPS. <span style="color:var(--good);font-weight:700">Green</span>: SNIPS std below ¾ of IPS-pop's. <span style="color:var(--bad);font-weight:700">Red</span>: above 4/3. Look at the clip-1000 column: popularity metrics drop, duration metrics rise.</p>
+
+    <h3>SNIPS − IPS-pop at the same clip (from the PR)</h3>
+    <div id="pair-table"></div>
+    <p class="rb-note">Each cell: Δ = SNIPS − IPS-pop, the paired bootstrap 95% CI over the same test users (it covers user sampling only), and the seed std IPS-pop → SNIPS. Look at ARP@10: many CIs exclude 0, yet every Δ is smaller than the seed std. Source: the merged SNIPS PR text.</p>
+
+    <div class="grid2">
+      <div class="chart-box"><div class="chart-h">Popularity vs top-10 accuracy</div><div id="sc1"></div>
+        <p class="cap">The two curves trace the same path: lower ARP@10 costs NDCG@10 · click, and SNIPS does not buy a better trade-off.</p></div>
+      <div class="chart-box"><div class="chart-h">Popularity vs duration fairness (off-target)</div><div id="sc2"></div>
+        <p class="cap">Both methods move up and left from Naive MF: lists get less popular, and duration groups get less equal exposure (higher <span data-term="rsp">RSP</span>_dur).</p></div>
+    </div>
+
+    <h3>All biases at once</h3>
+    <div id="dt"></div>
+    <p class="cap rb-note">Compare each SNIPS row with the IPS-pop row at the same clip: the colours and stars match almost everywhere.</p>
+  </section>
+
+  <section id="findings"><h2>Findings</h2>
+    <ul>
+      <li><b>SNIPS and IPS-pop are the same estimator here (on-target and off-target).</b> Tuning picks the same lr/wd at every clip. Accuracy differences between the two are at most 0.0004 (NDCG@10 · click at clip 1000: <span id="f-ndcg"></span>), within a seed std of 0.0006–0.0008. The largest list difference is 22 ARP@10 points at clip 1000, against a seed std of 23–52.</li>
+      <li><b>RQ1, targeted bias: strong reduction, as for IPS-pop.</b> ARP@10 falls from <span id="f-arp-base"></span> (Naive MF) to <span id="f-arp-10"></span> at clip 10 and <span id="f-arp-inf"></span> unclipped. <span data-term="aplt">APLT@10</span> rises from <span id="f-aplt-base"></span> to <span id="f-aplt-inf"></span>. <span data-term="coverage">Coverage@10</span> drops below Naive MF at clip 10–30 (<span id="f-cov-30"></span> at clip 30 vs <span id="f-cov-base"></span>), then rises to <span id="f-cov-inf"></span> unclipped. All Δ significant.</li>
+      <li><b>RQ2, off-target effects: the same harms as IPS-pop.</b> Duration fairness worsens at every clip: RSP_dur <span id="f-rspd-base"></span> → <span id="f-rspd-range"></span>. <span data-term="clickbait_share">Clickbait share</span> rises from <span id="f-cb-base"></span> to <span id="f-cb-range"></span>. NDCG@10 · click falls by <span id="f-ndcg-range"></span>, while <span data-term="gauc">GAUC</span> · click rises by <span id="f-gauc-range"></span> (all significant). The user-group <span data-term="ndcg_gap">NDCG gaps</span> do not change significantly.</li>
+      <li><b>Seed variance (H2's mechanism): lower only for popularity metrics at high clip.</b> At clip 1000, SNIPS halves the seed std of ARP@10 (52 → 23) and APLT@10 (0.100 → 0.047). Unclipped, ARP@10 std falls from 5.1 to 2.5. At clip ≤ 300 the stds are similar. Duration metrics go the other way at clip 1000: mean list duration std 1.6 → 2.4 s, <span data-term="w1">W1</span> std 1.3 → 2.0 s.</li>
+      <li><b>The clip-1000 variance drop rests on one seed.</b> One IPS-pop seed lands at ARP@10 266, its SNIPS twin at 139; the other four pairs stay within 24 points. <i>Our calculation:</i> the variance ratio is (52.2/23.4)² ≈ 5.0, below the two-sided 5% F critical value of about 9.6 for 4 and 4 degrees of freedom. With 5 seeds this is suggestive, not established.</li>
+      <li><b>"Significant" SNIPS − IPS-pop differences are not robust differences.</b> At clip 1000, ARP@10 differs by −22.1 with CI [−22.3, −21.9], which excludes 0. The CI covers user sampling only; across seeds the same quantity moves by 23–52. A <span data-term="sig">*</span> between two near-identical training runs mostly reflects which seeds were drawn.</li>
+    </ul>
+  </section>
+
+  <section id="discussion"><h2>Discussion</h2>
+    <p><b>Mechanism → result.</b> SNIPS changes the per-batch scale of IPS-pop's loss by the factor 1/s<sub>b</sub>. Our propensities do not depend on the model, so the full-data objective is unchanged; only the step sizes differ, and by little: at B = 8,192 the batch mean weight has a std of about 2% at clip 1000 and 3% unclipped (our calculation from the logged ESS). Adam also rescales steps by running gradient statistics, which should damp the difference further <i>(interpretation)</i>. The visible changes are therefore small and erratic. <i>Likely because</i> tiny per-step differences shift which epoch early stopping keeps, and at high clip the top-10 list composition still moves a lot between epochs. The PR's smoke run fits this: at clip ∞ with the same lr/wd, SNIPS's best epoch was 7 and IPS-pop's was 5.</p>
+    <p><b>Trade-off and research questions.</b> SNIPS exposes no trade-off of its own; it inherits IPS-pop's. <b>RQ1:</b> yes, it reduces popularity concentration as strongly as IPS-pop. <b>RQ2:</b> it carries the same off-target costs: worse duration fairness, more clickbait and lower NDCG@10 · click. <b>RQ3:</b> the <span data-term="coupling">duration–popularity coupling</span> looks the same: mean list duration rises by about 7–8 s at clip ≤ 100, then sits about 1–2 s below Naive MF at clip ≥ 300, while RSP_dur worsens throughout. <b>RQ4:</b> the SNIPS and IPS-pop points coincide in every trade-off plot; neither dominates the other on the <span data-term="pareto">Pareto frontier</span>. <b>H2:</b> tail coverage rises (to 0.147 unclipped) and NDCG@10 falls, as H2 expects. IPS-pop did not raise accuracy seed variance, so there is little variance for SNIPS to remove; the one place it seems to help, list composition at clip 1000, is within 5-seed noise.</p>
+    <p><b>Open questions.</b> (1) A SNIPS that differs materially from IPS-pop needs a normaliser that is not constant over the training set: one that depends on the model, as in the paper, or one computed per group, e.g. per user, so that each user's weighted loss averages to one. Per-user normalisation would change how much each user counts, which could matter for the user-group gaps. It is not implemented. (2) Is the clip-1000 variance reduction real? Twenty seeds, or smaller batches that make s<sub>b</sub> vary more, would tell.</p>
+  </section>
+
+  <section id="caveats"><h2>Caveats</h2>
+    <ul>
+      <li>The bootstrap CIs of set metrics (coverage, entropy, Gini) are biased; for coverage the CI can fail to contain the point estimate.</li>
+      <li>There is no multiple-comparison correction.</li>
+      <li><code>*</code> covers user sampling, not seed variance. This matters most here, where SNIPS and IPS-pop differ by less than the seed std.</li>
+      <li>Satisfaction cells rest on about 10% of users.</li>
+      <li>A std estimated from 5 seeds is itself noisy; at clip 300 and 1000 the std differences come from one seed each.</li>
+      <li>The batch size (8,192) sets the size of the SNIPS effect. Results may differ at smaller batches.</li>
+      <li>Rows at clip ≥ 100 use lr 1e-3 instead of Naive MF's 1e-2; this affects Δ vs Naive MF but not SNIPS vs IPS-pop.</li>
+      <li>The demo uses made-up numbers and a heavier tail per batch than real training (B = 8 vs 8,192); it shows the mechanism, not our results.</li>
+    </ul>
+  </section>
+  <footer>Data: test split, 19,099 users, 5 seeds per setting. Generated from outputs/sweeps via assets/data.js.</footer>
+</main></div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const svgEl = RB.svgEl;
+  const KNOBS = [10, 30, 100, 300, 1000, "inf"];
+  const kl = (k) => (k === "inf" ? "∞" : String(k));
+  const base = RB.baselineOf("snips");
+  const S = (k) => RB.find("snips", k), I = (k) => RB.find("ips_pop", k);
+  const F = (key, v, o) => RB.fmt(key, v, o);
+  const niceTicks = (lo, hi, n = 5) => {
+    if (!(hi > lo)) { hi = lo + 1; lo = lo - 1; }
+    const span = hi - lo, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= n) || 10 * mag;
+    const out = [];
+    for (let t = Math.ceil(lo / step) * step; t <= hi + 1e-12; t += step) out.push(+t.toPrecision(12));
+    return out;
+  };
+
+  // ---------- prose numbers computed from data.js ----------
+  const facts = RB.R.facts;
+  $("p-head").textContent = Math.round(facts.head_share_exposure * 100) + "%";
+  $("p-maxw").textContent = "about " + Math.round(S("inf").diag.ips_max_weight);
+  const setv = (id, key, rec, o) => { $(id).textContent = F(key, RB.val(rec, key), o); };
+  const range = (key, recs, f = (r) => RB.val(r, key)) => { const v = recs.map(f); return [Math.min(...v), Math.max(...v)]; };
+  const all = KNOBS.map(S);
+  $("f-ndcg").textContent = F("ndcg@10[click]", RB.val(S(1000), "ndcg@10[click]") - RB.val(I(1000), "ndcg@10[click]"), { signed: true });
+  setv("f-arp-base", "arp@10", base); setv("f-arp-10", "arp@10", S(10)); setv("f-arp-inf", "arp@10", S("inf"));
+  setv("f-aplt-base", "aplt@10", base); setv("f-aplt-inf", "aplt@10", S("inf"));
+  setv("f-cov-30", "coverage@10", S(30)); setv("f-cov-base", "coverage@10", base); setv("f-cov-inf", "coverage@10", S("inf"));
+  setv("f-rspd-base", "rsp_dur@10", base);
+  let r = range("rsp_dur@10", all); $("f-rspd-range").textContent = F("rsp_dur@10", r[0]) + "–" + F("rsp_dur@10", r[1]);
+  setv("f-cb-base", "clickbait_share@10", base);
+  r = range("clickbait_share@10", all); $("f-cb-range").textContent = F("clickbait_share@10", r[0]) + "–" + F("clickbait_share@10", r[1]);
+  r = range("ndcg@10[click]", all, (x) => -RB.delta(x, "ndcg@10[click]")); $("f-ndcg-range").textContent = F("ndcg@10[click]", r[0]) + " to " + F("ndcg@10[click]", r[1]);
+  r = range("gauc[click]", all, (x) => RB.delta(x, "gauc[click]")); $("f-gauc-range").textContent = F("gauc[click]", r[0]) + " to " + F("gauc[click]", r[1]);
+
+  // ---------- diagnostics table ----------
+  (function () {
+    const rows = KNOBS.map((k) => {
+      const s = S(k), d = s.diag, sdS = Math.sqrt((1 / d.ips_ess_share - 1) / 8192);
+      return `<tr><th>${kl(k)}</th><td class="num">${d.ips_ess_share.toFixed(3)}</td><td class="num">${d.ips_max_weight.toFixed(1)}</td><td class="num">${(d.ips_clipped_share * 100).toFixed(1)}%</td><td class="num">${s.lr} / ${s.wd}</td><td class="num">${I(k).lr} / ${I(k).wd}</td><td class="num">${(sdS * 100).toFixed(1)}%</td></tr>`;
+    }).join("");
+    $("diag-table").innerHTML = `<div class="rb-table-wrap"><table class="plain cmp"><thead><tr><th>clip</th><th class="num">ESS share</th><th class="num">max w</th><th class="num">clipped</th><th class="num">SNIPS lr / wd</th><th class="num">IPS-pop lr / wd</th><th class="num">std of s<sub>b</sub> at B = 8,192</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  })();
+
+  // ---------- line chart ----------
+  const lineKeys = ["arp@10", "aplt@10", "coverage@10", "rsp_pop@10", "calibration_kl_pop@10", "gauc[click]", "ndcg@10[click]",
+    "list_duration@10[click].mean", "rsp_dur@10", "wasserstein_duration@10[click]", "clickbait_share@10", "ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|mainstream].gap"];
+  let lcKey = "arp@10";
+  const drawLC = () => RB.lineChart($("lc"), { methods: ["ips_pop", "snips"], metric: lcKey, baseline: $("lc-base").checked, height: 330, tipMetrics: ["gauc[click]", "ndcg@10[click]"] });
+  RB.metricSelect($("lc-sel"), lineKeys, lcKey, (k) => { lcKey = k; drawLC(); });
+  $("lc-base").addEventListener("change", drawLC);
+
+  // ---------- paired seed chart ----------
+  const seedKeys = ["arp@10", "aplt@10", "rsp_pop@10", "calibration_kl_pop@10", "coverage@10", "list_duration@10[click].mean", "wasserstein_duration@10[click]", "ndcg@10[click]", "gauc[click]"];
+  function drawSeeds(key) {
+    const box = $("sd"); box.innerHTML = "";
+    const sc = RB.info(key).scale || 1;
+    const W = 640, H = 330, m = { l: 70, r: 14, t: 16, b: 66 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, class: "rb-chart", role: "img" }, box);
+    const data = KNOBS.map((k) => ({ k, a: I(k).metrics[key].seeds.map((v) => v * sc), b: S(k).metrics[key].seeds.map((v) => v * sc), sa: RB.std(I(k), key), sb: RB.std(S(k), key) }));
+    const vs = data.flatMap((d) => d.a.concat(d.b));
+    let lo = Math.min(...vs), hi = Math.max(...vs); const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
+    const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
+    const dig = Math.max(0, RB.info(key).digits - 1);
+    for (const t of niceTicks(lo, hi)) {
+      svgEl("line", { x1: m.l, x2: m.l + iw, y1: y(t), y2: y(t), class: "rb-grid" }, svg);
+      svgEl("text", { x: m.l - 8, y: y(t) + 4, "text-anchor": "end", class: "rb-tick" }, svg).textContent = F(key, t, { digits: dig });
+    }
+    svgEl("line", { x1: m.l, x2: m.l, y1: m.t, y2: m.t + ih, class: "rb-axis" }, svg);
+    svgEl("line", { x1: m.l, x2: m.l + iw, y1: m.t + ih, y2: m.t + ih, class: "rb-axis" }, svg);
+    const yl = svgEl("text", { x: 16, y: m.t + ih / 2, "text-anchor": "middle", class: "rb-label", transform: `rotate(-90 16 ${m.t + ih / 2})` }, svg);
+    yl.textContent = RB.info(key).label + " (per seed)";
+    const cw = iw / KNOBS.length, ca = RB.color("ips_pop"), cb = RB.color("snips");
+    data.forEach((d, j) => {
+      const cx = m.l + cw * (j + 0.5), xa = cx - 20, xb = cx + 20;
+      d.a.forEach((va, s) => svgEl("line", { x1: xa, x2: xb, y1: y(va), y2: y(d.b[s]), stroke: "#94a3b8", "stroke-width": 1.2 }, svg));
+      const dot = (x, v, c, who, s) => {
+        const e = svgEl("circle", { cx: x, cy: y(v), r: 4.5, fill: c, stroke: "#fff", "stroke-width": 1.2, class: "rb-pt" }, svg);
+        e.addEventListener("mousemove", (ev) => RB.showTip(`<div class="rb-tip-h">${who} · clip = ${kl(d.k)} · seed ${s + 1}</div>${RB.info(key).label}: ${F(key, v)}`, ev));
+        e.addEventListener("mouseleave", RB.hideTip);
+      };
+      d.a.forEach((v, s) => dot(xa, v, ca, "IPS-pop", s));
+      d.b.forEach((v, s) => dot(xb, v, cb, "SNIPS", s));
+      svgEl("text", { x: cx, y: m.t + ih + 18, "text-anchor": "middle", class: "rb-tick", "font-weight": 700 }, svg).textContent = "clip " + kl(d.k);
+      const lower = d.sb < 0.75 * d.sa, higher = d.sb > (4 / 3) * d.sa;
+      const dg = RB.info(key).digits, sdF = (v) => F(key, v, { digits: dg + (dg <= 2 ? 1 : 0) });
+      svgEl("text", { x: cx, y: m.t + ih + 34, "text-anchor": "middle", class: "rb-tick", style: `fill:${lower ? "#15803d" : higher ? "#b91c1c" : "#64748b"};font-weight:${lower || higher ? 700 : 400}` }, svg).textContent = `${sdF(d.sa)} → ${sdF(d.sb)}`;
+    });
+    svgEl("text", { x: m.l - 8, y: m.t + ih + 34, "text-anchor": "end", class: "rb-tick" }, svg).textContent = "seed std";
+    svgEl("text", { x: m.l + iw / 2, y: H - 8, "text-anchor": "middle", class: "rb-label" }, svg).textContent = "clip — left dot column: IPS-pop, right: SNIPS";
+    const lg = document.createElement("div"); lg.className = "rb-legend";
+    lg.innerHTML = `<span><i style="background:${ca}"></i>IPS-pop</span><span><i style="background:${cb}"></i>SNIPS</span><span><i style="background:#94a3b8;height:2px;vertical-align:4px"></i>same seed</span><span>green / red sd text: SNIPS std below ¾ / above 4/3 of IPS-pop's</span>`;
+    box.appendChild(lg);
+  }
+  RB.metricSelect($("sd-sel"), seedKeys, "arp@10", drawSeeds);
+
+  // ---------- seed-std table ----------
+  (function () {
+    const keys = ["arp@10", "aplt@10", "rsp_pop@10", "calibration_kl_pop@10", "coverage@10", "list_duration@10[click].mean", "wasserstein_duration@10[click]", "ndcg@10[click]", "gauc[click]"];
+    const head = KNOBS.map((k) => `<th class="num">clip ${kl(k)}</th>`).join("");
+    const body = keys.map((key) => `<tr><th>${RB.info(key).label}</th>${KNOBS.map((k) => {
+      const a = RB.std(I(k), key), b = RB.std(S(k), key);
+      const cls = b < 0.75 * a ? "lower" : b > (4 / 3) * a ? "higher" : "";
+      const dg = RB.info(key).digits, o = { digits: dg + (dg <= 2 ? 1 : 0) };
+      return `<td class="num ${cls}">${F(key, a, o)} → ${F(key, b, o)}</td>`;
+    }).join("")}</tr>`).join("");
+    $("std-table").innerHTML = `<div class="rb-table-wrap"><table class="plain cmp"><thead><tr><th>metric</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  })();
+
+  // ---------- SNIPS − IPS-pop table (PR #4 text) ----------
+  (function () {
+    const cols = ["GAUC · click", "NDCG@10 · click", "ARP@10", "APLT@10", "Coverage@10", "Mean list duration (s)"];
+    const T = {
+      10: [["−0.0000", "[−0.0000, 0.0000]", "0.0003→0.0003"], ["0.0000", "[−0.0000, 0.0001]", "0.0005→0.0005"], ["0.1089", "[0.0491, 0.1787]", "57.1→57.2"], ["0.0000", "[−0.0000, 0.0001]", "0.0103→0.0105"], ["−0.0000", "[−0.0001, 0.0001]", "0.0042→0.0041"], ["−0.0157", "[−0.0229, −0.0082]", "2.86→2.86"]],
+      30: [["−0.0000", "[−0.0000, 0.0000]", "0.0003→0.0003"], ["0.0000", "[−0.0000, 0.0001]", "0.0004→0.0004"], ["0.0383", "[−0.0009, 0.0760]", "22.7→22.5"], ["0.0001", "[0.0000, 0.0002]", "0.0432→0.0424"], ["0.0000", "[−0.0001, 0.0001]", "0.0049→0.0049"], ["−0.0054", "[−0.0144, 0.0041]", "4.86→4.87"]],
+      100: [["0.0000", "[0.0000, 0.0001]", "0.0001→0.0001"], ["0.0002", "[0.0001, 0.0003]", "0.0006→0.0005"], ["5.7074", "[5.6045, 5.8184]", "23.5→19.1"], ["−0.0109", "[−0.0111, −0.0107]", "0.0386→0.0296"], ["−0.0010", "[−0.0011, −0.0006]", "0.0058→0.0052"], ["0.7952", "[0.7702, 0.8185]", "3.52→2.66"]],
+      300: [["−0.0000", "[−0.0001, −0.0000]", "0.0002→0.0002"], ["−0.0003", "[−0.0005, −0.0001]", "0.0007→0.0009"], ["−13.2", "[−13.4, −13.0]", "44.0→45.2"], ["0.0221", "[0.0217, 0.0224]", "0.0866→0.0841"], ["0.0011", "[0.0005, 0.0016]", "0.0068→0.0070"], ["−0.3666", "[−0.4048, −0.3227]", "1.72→1.75"]],
+      1000: [["0.0001", "[0.0000, 0.0002]", "0.0004→0.0002"], ["−0.0004", "[−0.0005, −0.0002]", "0.0008→0.0006"], ["−22.1", "[−22.3, −21.9]", "52.2→23.4"], ["0.0403", "[0.0399, 0.0406]", "0.1003→0.0472"], ["−0.0005", "[−0.0014, 0.0001]", "0.0027→0.0027"], ["−0.6766", "[−0.7152, −0.6358]", "1.64→2.43"]],
+      inf: [["0.0000", "[0.0000, 0.0001]", "0.0003→0.0003"], ["0.0001", "[−0.0001, 0.0002]", "0.0001→0.0004"], ["1.9997", "[1.9235, 2.0661]", "5.08→2.51"], ["−0.0058", "[−0.0060, −0.0055]", "0.0109→0.0063"], ["0.0005", "[−0.0003, 0.0010]", "0.0022→0.0022"], ["0.2833", "[0.2541, 0.3138]", "1.55→1.14"]],
+    };
+    const head = cols.map((c) => `<th class="num">${c}</th>`).join("");
+    const body = KNOBS.map((k) => `<tr><th>clip ${kl(k)}</th>${T[k].map(([d, ci, sd]) => `<td class="num">${d}<div class="sd">${ci}</div><div class="sd">sd ${sd}</div></td>`).join("")}</tr>`).join("");
+    $("pair-table").innerHTML = `<div class="rb-table-wrap"><table class="plain cmp"><thead><tr><th>setting</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  })();
+
+  // ---------- scatters and delta table ----------
+  RB.scatter($("sc1"), { methods: ["ips_pop", "snips"], x: "arp@10", y: "ndcg@10[click]", height: 340, tipMetrics: ["aplt@10"] });
+  RB.scatter($("sc2"), { methods: ["ips_pop", "snips"], x: "arp@10", y: "rsp_dur@10", height: 340, tipMetrics: ["list_duration@10[click].mean"] });
+  RB.deltaTable($("dt"), { methods: ["ips_pop", "snips"], metrics: ["gauc[click]", "ndcg@10[click]", "arp@10", "aplt@10", "coverage@10", "rsp_pop@10",
+    "list_duration@10[click].mean", "rsp_dur@10", "wasserstein_duration@10[click]", "clickbait_share@10", "ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|mainstream].gap"] });
+
+  // ---------- interactive demo (toy, deterministic) ----------
+  (function () {
+    const CLIPS = [1, 3, 10, 30, 100, 300, 1000, Infinity];
+    const cI = RB.color("ips_pop"), cS = RB.color("snips");
+    const HALO = "paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round";
+    function mulberry32(a) { return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+    const N = 160;
+    const rows = (() => { const rg = mulberry32(4285), out = []; for (let i = 0; i < N; i++) out.push({ id: i, raw: Math.pow(1 - (i + 0.5) / N, -1 / 0.8), loss: 0.3 + 0.5 * rg() }); return out; })();
+    const minRaw = Math.min(...rows.map((x) => x.raw));
+    const st = { ci: 6, B: 8, order: 1, sel: null };
+    const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    const sd = (a) => { const mu = mean(a); return Math.sqrt(mean(a.map((x) => (x - mu) ** 2))); };
+
+    function compute() {
+      const clip = CLIPS[st.ci];
+      let w = rows.map((x) => Math.min(clip, x.raw / minRaw)); const mw = mean(w); w = w.map((x) => x / mw);
+      const idx = rows.map((x) => x.id), rg = mulberry32(st.order * 7919);
+      for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(rg() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+      const batches = [];
+      for (let b = 0; b < N / st.B; b++) {
+        const ids = idx.slice(b * st.B, (b + 1) * st.B);
+        const sw = ids.reduce((a, i) => a + w[i], 0), swl = ids.reduce((a, i) => a + w[i] * rows[i].loss, 0);
+        batches.push({ ids, s: sw / st.B, ips: swl / st.B, sn: swl / sw, sw });
+      }
+      const T = mean(rows.map((x, i) => w[i] * x.loss));
+      const ess = (w.reduce((a, b) => a + b, 0) ** 2) / (N * w.reduce((a, b) => a + b * b, 0));
+      return { w, batches, T, ess, maxw: Math.max(...w) };
+    }
+
+    function axisY(svg, m, ih, lo, hi, fmt, W) {
+      const y = (v) => m.t + ih - ((v - lo) / (hi - lo)) * ih;
+      for (const t of niceTicks(lo, hi, 4)) {
+        svgEl("line", { x1: m.l, x2: W - m.r, y1: y(t), y2: y(t), class: "rb-grid" }, svg);
+        svgEl("text", { x: m.l - 6, y: y(t) + 4, "text-anchor": "end", class: "rb-tick" }, svg).textContent = fmt(t);
+      }
+      svgEl("line", { x1: m.l, x2: m.l, y1: m.t, y2: m.t + ih, class: "rb-axis" }, svg);
+      svgEl("line", { x1: m.l, x2: W - m.r, y1: m.t + ih, y2: m.t + ih, class: "rb-axis" }, svg);
+      return y;
+    }
+
+    function render() {
+      const res = compute(), nb = res.batches.length;
+      if (st.sel == null || st.sel >= nb) st.sel = res.batches.reduce((bi, b, i, a) => (b.s > a[bi].s ? i : bi), 0);
+      const clip = CLIPS[st.ci];
+      $("d-clip-v").textContent = clip === Infinity ? "∞" : clip === 1 ? "1 (all weights equal: both are Naive MF)" : String(clip);
+      document.querySelectorAll("[data-b]").forEach((b) => b.classList.toggle("on", +b.dataset.b === st.B));
+      document.querySelectorAll("[data-o]").forEach((b) => b.classList.toggle("on", +b.dataset.o === st.order));
+      const W = 640, m = { l: 46, r: 12, t: 12, b: 26 };
+
+      // A: step scale bars
+      const A = $("d-a"); A.innerHTML = "";
+      const ihA = 190 - m.t - m.b, maxS = Math.max(2, ...res.batches.map((b) => b.s)) * 1.08;
+      const yA = axisY(A, m, ihA, 0, maxS, (t) => t.toFixed(t < 10 ? 1 : 0), W);
+      const bw = (W - m.l - m.r) / nb;
+      res.batches.forEach((b, i) => {
+        const x = m.l + i * bw;
+        const rect = svgEl("rect", { x: x + bw * 0.15, width: bw * 0.7, y: yA(b.s), height: Math.max(0.5, yA(0) - yA(b.s)), fill: cI, opacity: i === st.sel ? 1 : 0.55, stroke: i === st.sel ? "#0f172a" : "none", "stroke-width": 1.5, style: "cursor:pointer" }, A);
+        rect.addEventListener("click", () => { st.sel = i; render(); });
+        rect.addEventListener("mousemove", (ev) => RB.showTip(`<div class="rb-tip-h">Batch ${i + 1}</div>IPS-pop step scale s<sub>b</sub> = ${b.s.toFixed(2)}<br>SNIPS step scale = 1<br>largest weight in batch: ${Math.max(...b.ids.map((j) => res.w[j])).toFixed(1)}`, ev));
+        rect.addEventListener("mouseleave", RB.hideTip);
+        if (nb <= 20 || i % 2 === 0) svgEl("text", { x: x + bw / 2, y: 190 - 10, "text-anchor": "middle", class: "rb-tick" }, A).textContent = i + 1;
+      });
+      svgEl("line", { x1: m.l, x2: W - m.r, y1: yA(1), y2: yA(1), stroke: cS, "stroke-width": 2.2, "stroke-dasharray": "7 4" }, A);
+      svgEl("text", { x: W - m.r - 4, y: yA(1) - 5, "text-anchor": "end", class: "rb-tick", "font-weight": 700, style: HALO + ";fill:#4d7c0f" }, A).textContent = "SNIPS = 1";
+
+      // B: batch estimates
+      const Bs = $("d-b"); Bs.innerHTML = "";
+      const vals = res.batches.flatMap((b) => [b.ips, b.sn]).concat([res.T]);
+      let lo = Math.min(0, ...vals), hi = Math.max(...vals); hi += (hi - lo) * 0.08;
+      const yB = axisY(Bs, m, ihA, lo, hi, (t) => t.toFixed(1), W);
+      svgEl("line", { x1: m.l, x2: W - m.r, y1: yB(res.T), y2: yB(res.T), stroke: "#334155", "stroke-width": 1.5 }, Bs);
+      const tB = svgEl("text", { x: m.l + 6, y: yB(res.T) - 5, "text-anchor": "start", class: "rb-tick", "font-weight": 700, style: HALO + ";fill:#334155" }, Bs);
+      tB.textContent = "full data " + res.T.toFixed(3);
+      res.batches.forEach((b, i) => {
+        const cx = m.l + (i + 0.5) * bw;
+        svgEl("line", { x1: cx, x2: cx, y1: yB(b.ips), y2: yB(b.sn), stroke: "#cbd5e1", "stroke-width": 1 }, Bs);
+        svgEl("circle", { cx: cx - 3, cy: yB(b.ips), r: 4, fill: cI, opacity: i === st.sel ? 1 : 0.8 }, Bs);
+        const yy = yB(b.sn), s = 4.5;
+        svgEl("path", { d: `M${cx + 3} ${yy - s}L${cx + 3 + s} ${yy}L${cx + 3} ${yy + s}L${cx + 3 - s} ${yy}Z`, fill: cS, stroke: "#fff", "stroke-width": 0.8 }, Bs);
+        if (nb <= 20 || i % 2 === 0) svgEl("text", { x: cx, y: 190 - 10, "text-anchor": "middle", class: "rb-tick" }, Bs).textContent = i + 1;
+      });
+      Bs.appendChild(tB);
+
+      // C: selected batch decomposition
+      const C = $("d-c"); C.innerHTML = "";
+      const b = res.batches[st.sel], mC = { l: 76, r: 16 }, iwC = W - mC.l - mC.r;
+      const xmax = Math.max(1, b.s) * 1.04, xs = (v) => mC.l + (v / xmax) * iwC;
+      const big = b.ids.reduce((bi, j) => (res.w[j] > res.w[bi] ? j : bi), b.ids[0]);
+      [["IPS-pop", (j) => res.w[j] / st.B, 18, b.s], ["SNIPS", (j) => res.w[j] / b.sw, 56, 1]].forEach(([lab, share, y0, tot]) => {
+        svgEl("text", { x: mC.l - 8, y: y0 + 11, "text-anchor": "end", class: "rb-label" }, C).textContent = lab;
+        svgEl("text", { x: mC.l - 8, y: y0 + 25, "text-anchor": "end", class: "rb-tick", "font-weight": 700, style: "fill:#0f172a" }, C).textContent = "total " + tot.toFixed(2);
+        let acc = 0;
+        b.ids.forEach((j, n) => {
+          const v = share(j);
+          const rc = svgEl("rect", { x: xs(acc), y: y0, width: Math.max(0.5, xs(acc + v) - xs(acc)), height: 26, fill: j === big ? "#f59e0b" : lab === "SNIPS" ? cS : cI, opacity: j === big ? 1 : n % 2 ? 0.55 : 0.8, stroke: "#fff", "stroke-width": 1 }, C);
+          rc.addEventListener("mousemove", (ev) => RB.showTip(`<div class="rb-tip-h">Toy row ${j + 1}</div>weight w = ${res.w[j].toFixed(2)}, loss ℓ = ${rows[j].loss.toFixed(2)}<br>share of the ${lab} step: ${v.toFixed(3)}`, ev));
+          rc.addEventListener("mouseleave", RB.hideTip);
+          acc += v;
+        });
+      });
+      svgEl("line", { x1: xs(1), x2: xs(1), y1: 10, y2: 90, stroke: "#334155", "stroke-dasharray": "3 3" }, C);
+      svgEl("text", { x: mC.l, y: 106, class: "rb-tick" }, C).textContent = `Batch ${st.sel + 1} · orange = its largest-weight row (w = ${res.w[big].toFixed(1)}) · dotted line = scale 1`;
+
+      // readouts
+      const s = res.batches.map((x) => x.s), ips = res.batches.map((x) => x.ips), sn = res.batches.map((x) => x.sn);
+      $("d-read").innerHTML = `<dl class="kv">
+        <dt>toy max w</dt><dd>${res.maxw.toFixed(1)}</dd>
+        <dt>toy ESS share</dt><dd>${res.ess.toFixed(2)}</dd>
+        <dt>batches</dt><dd>${nb} × ${st.B} rows</dd>
+      </dl><h4>Step scale per batch</h4><dl class="kv">
+        <dt class="ips">IPS-pop</dt><dd>${Math.min(...s).toFixed(2)} – ${Math.max(...s).toFixed(2)}, std ${sd(s).toFixed(2)}</dd>
+        <dt class="sn">SNIPS</dt><dd>1 for every batch</dd>
+        <dt>average</dt><dd><span class="ips">${mean(s).toFixed(2)}</span> vs <span class="sn">1.00</span></dd>
+      </dl><h4>Batch loss estimates</h4><dl class="kv">
+        <dt class="ips">IPS-pop</dt><dd>mean ${mean(ips).toFixed(3)}, std ${sd(ips).toFixed(3)}</dd>
+        <dt class="sn">SNIPS</dt><dd>mean ${mean(sn).toFixed(3)}, std ${sd(sn).toFixed(3)}</dd>
+        <dt>full data</dt><dd>${res.T.toFixed(3)} (both)</dd>
+      </dl>`;
+    }
+
+    $("d-clip").addEventListener("input", (e) => { st.ci = +e.target.value; st.sel = null; render(); });
+    document.querySelectorAll("[data-b]").forEach((b) => b.addEventListener("click", () => { st.B = +b.dataset.b; st.sel = null; render(); }));
+    document.querySelectorAll("[data-o]").forEach((b) => b.addEventListener("click", () => { st.order = +b.dataset.o; st.sel = null; render(); }));
+    render();
+  })();
+})();
+</script>
+</body></html>
