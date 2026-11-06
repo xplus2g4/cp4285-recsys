@@ -1,3 +1,0 @@
-recommender = "mf"
-train_label = "satisfaction"
-split = "guarded"

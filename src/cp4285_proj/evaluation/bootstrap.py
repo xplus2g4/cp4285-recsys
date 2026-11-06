@@ -15,8 +15,8 @@ def resample_positions(n_users: int, resamples: int, seed: int) -> np.ndarray:
 
 
 def bootstrap_samples(panel: Panel, b: EvalBundle, result: PanelResult, progress: bool = True) -> tuple[list[str], np.ndarray]:
-    """[B, S] resampled scalars. Per-user metrics resample the saved per-user vectors; global and
-    per-group metrics are recomputed on `b.resample(positions)`."""
+    """[B, S] resampled scalars. Per-user metrics resample the saved per-user vectors; global metrics are
+    recomputed on `b.resample(positions)`."""
     names = list(result.scalars)
     col = {n: j for j, n in enumerate(names)}
     positions = resample_positions(len(b.users), panel.bootstrap.resamples, panel.bootstrap.seed)

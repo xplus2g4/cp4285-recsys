@@ -1,3 +1,0 @@
-recommender = "snips"
-train_label = "click"
-split = "guarded"

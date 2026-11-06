@@ -1,4 +1,4 @@
-"""MACR (Wei et al., KDD '21) on the MF backbone (spec §13.5).
+"""MACR (Wei et al., KDD '21) on the MF backbone (spec §13.1).
 
 Three branches: ŷ_k is the MF backbone logit, i.e. the existing recommender used unchanged, as MACR is
 model-agnostic. The item module is ŷ_i = w_i·q_i + b_i' and the user module is ŷ_u = w_u·p_u + b_u', both

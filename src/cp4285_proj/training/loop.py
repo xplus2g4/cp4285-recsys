@@ -66,7 +66,7 @@ def build_train_data(frames: dict[str, pl.DataFrame], label: LabelSpec, device: 
         item=t("item_idx", torch.int64),
         target=t(label.name, torch.float32),
         extras=extras,
-        items=ItemTensors(**{c: torch.tensor(it[c].to_numpy(), device=device).to(torch.int64) for c in ("pop_exposure", "pop_bin", "dur_bin", "duration_ms")}),
+        items=ItemTensors(**{c: torch.tensor(it[c].to_numpy(), device=device).to(torch.int64) for c in ("pop_exposure", "duration_ms")}),
         user_features=codes(frames["user_features"], "user_idx"),
         item_features=codes(frames["item_features"], "item_idx"),
         n_users=frames["users"].height,

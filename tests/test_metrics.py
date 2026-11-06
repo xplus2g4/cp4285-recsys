@@ -11,9 +11,8 @@ from conftest import make_bundle
 
 from cp4285_proj.evaluation.panel import parse_panel, run_panel
 from cp4285_proj.metrics.accuracy import gauc, gauc_value, ndcg
-from cp4285_proj.metrics.duration import list_duration, wasserstein_duration
-from cp4285_proj.metrics.groups import calibration_kl_pop, ndcg_by_group
-from cp4285_proj.metrics.popularity import gini, gini_coefficient, reo_pop, rsp_pop
+from cp4285_proj.metrics.duration import wasserstein_duration
+from cp4285_proj.metrics.exposure import gini, gini_coefficient
 
 L2, L3, L4 = math.log2(2), math.log2(3), math.log2(4)
 
@@ -101,55 +100,10 @@ def test_gini_counts_zero_frequency_items():
     assert gini(b, k=2)["value"] == pytest.approx(6 / 16)
 
 
-# --------------------------------------------------------------------------- rsp / reo
-
-
-def _fair_bundle():
-    # 10 items, pop_bin = [0,0,1,1,2,2,3,3,4,4]; u0 has seen item 0
-    return make_bundle(
-        cand_user_pos=[0, 0, 0, 0, 0, 1, 1, 1],
-        cand_item=[9, 0, 4, 5, 7, 2, 3, 9],
-        cand_score=[0.0] * 8,
-        topk=[[9, 8], [9, 2]],
-        labels={"click": [1, 1, 0, 1, 1, 1, 1, 0]},
-        seen_rows={0: [0]},
-    )
-
-
-def test_rsp_uses_unseen_group_sizes():
-    # numerators per bin [0,1,0,0,3]; denominators [1+2, 4, 4, 4, 4] → P = [0, .25, 0, 0, .75]
-    p = np.array([0, 0.25, 0, 0, 0.75])
-    assert rsp_pop(_fair_bundle(), k=2)["value"] == pytest.approx(p.std() / p.mean())
-    assert p.std() / p.mean() == pytest.approx(math.sqrt(0.085) / 0.2)
-
-
-def test_reo_uses_relevant_candidates_per_bin():
-    # positives: u0 {9:b4, 0:b0, 5:b2, 7:b3}, u1 {2:b1, 3:b1}; hits: 9 (u0), 2 (u1) → P = [0, .5, 0, 0, 1]
-    assert reo_pop(_fair_bundle(), k=2, label="click")["value"] == pytest.approx(0.4 / 0.3)
-
-
-def test_reo_undefined_when_a_bin_has_no_positives():
-    b = _fair_bundle()
-    b.cand_labels["click"][3] = 0  # item 5 (bin 2) no longer relevant → 0/0
-    assert math.isnan(reo_pop(b, k=2, label="click")["value"])
-
-
-# --------------------------------------------------------------------------- calibration KL
-
-
-def test_calibration_kl_smoothing_and_no_history():
-    hist = [[0.5, 0.5, 0, 0, 0], [np.nan] * 5]
-    b = make_bundle([0], [0], [0.0], topk=[[0, 1], [0, 1]], hist_pop=hist)  # items 0,1 are both pop_bin 0
-    v = calibration_kl_pop(b, k=2)
-    # q = [1,0,0,0,0]; q~ = 0.99 q + 0.01 p = [0.995, 0.005, 0, 0, 0]; without smoothing KL would be infinite
-    assert v[0] == pytest.approx(0.5 * math.log(0.5 / 0.995) + 0.5 * math.log(0.5 / 0.005))
-    assert np.isnan(v[1])
-
-
 # --------------------------------------------------------------------------- duration
 
 
-def test_wasserstein_and_list_duration_pool_lists_against_relevant_rows():
+def test_wasserstein_pools_lists_against_relevant_rows():
     # lists: item 0 (10 s), item 1 (20 s); relevant candidate rows: item 0 (10 s), item 2 (40 s)
     b = make_bundle(
         cand_user_pos=[0, 0, 1],
@@ -161,38 +115,37 @@ def test_wasserstein_and_list_duration_pool_lists_against_relevant_rows():
         labels={"click": [1, 0, 1]},
     )
     assert wasserstein_duration(b, k=1, label="click")["value"] == pytest.approx(10.0)  # (|10-10| + |20-40|) / 2
-    d = list_duration(b, k=1, label="click")
-    assert (d["mean"], d["median"], d["ref_mean"], d["ref_median"]) == pytest.approx((15_000, 15_000, 25_000, 25_000))
-    assert d["delta_mean"] == pytest.approx(-10_000)
 
 
-# --------------------------------------------------------------------------- groups + resampling
+def test_wasserstein_undefined_without_relevant_rows():
+    b = make_bundle([0, 1], [0, 1], [0.0, 0.0], topk=[[0], [1]], labels={"click": [0, 0]})
+    assert math.isnan(wasserstein_duration(b, k=1, label="click")["value"])
 
 
-def test_ndcg_by_group_gap_ignores_no_history():
-    b = _ndcg_bundle("click", [0, 1, 1, 1, 0])
-    groups = {"activity": np.array(["high", "other"]), "mainstream": np.array(["low", "no_history"]), "dur_pref": np.array(["short", "mid"])}
-    b = make_bundle(b.cand_user_pos, b.cand_item, b.cand_score, b.topk, labels={"click": [0, 1, 1, 1, 0]}, groups=groups)
-    per_user = ndcg(b, k=3, label="click")
-    g = ndcg_by_group(b, k=3, label="click", grouping="mainstream")
-    assert g["low"] == pytest.approx(per_user[0]) and g["no_history"] == pytest.approx(per_user[1])
-    assert math.isnan(g["mid"]) and g["gap"] == pytest.approx(0.0)  # only one real group populated
-    a = ndcg_by_group(b, k=3, label="click", grouping="activity")
-    assert a["gap"] == pytest.approx(abs(per_user[0] - per_user[1]))
+# --------------------------------------------------------------------------- resampling
 
 
 def test_resample_matches_a_bundle_built_from_the_duplicated_users():
-    b = _fair_bundle()
-    rsp_pop(b, k=2), reo_pop(b, k=2, label="click")  # fill the per-user caches on the original bundle
+    b = make_bundle(
+        cand_user_pos=[0, 0, 0, 0, 0, 1, 1, 1],
+        cand_item=[9, 0, 4, 5, 7, 2, 3, 9],
+        cand_score=[0.5, 0.1, 0.9, 0.3, 0.2, 0.4, 0.8, 0.6],
+        topk=[[9, 8], [9, 2]],
+        labels={"click": [1, 1, 0, 1, 1, 1, 1, 0]},
+        duration_ms=np.arange(1, 11) * 1000,
+    )
+    ndcg(b, k=2, label="click")  # fill the per-user cache on the original bundle
     r = b.resample(np.array([1, 1, 0]))
     fresh = make_bundle(
         cand_user_pos=[0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2],
         cand_item=[2, 3, 9, 2, 3, 9, 9, 0, 4, 5, 7],
-        cand_score=[0.0] * 11,
+        cand_score=[0.4, 0.8, 0.6, 0.4, 0.8, 0.6, 0.5, 0.1, 0.9, 0.3, 0.2],
         topk=[[9, 2], [9, 2], [9, 8]],
         labels={"click": [1, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1]},
+        duration_ms=np.arange(1, 11) * 1000,
     )
-    fresh = dataclasses.replace(fresh, seen=b.seen, users=np.array([1, 1, 0]))
-    for fn in (lambda x: rsp_pop(x, k=2), lambda x: reo_pop(x, k=2, label="click"), lambda x: gini(x, k=2)):
+    fresh = dataclasses.replace(fresh, users=np.array([1, 1, 0]))
+    np.testing.assert_allclose(ndcg(r, k=2, label="click"), ndcg(fresh, k=2, label="click"))
+    for fn in (lambda x: wasserstein_duration(x, k=2, label="click"), lambda x: gini(x, k=2)):
         assert fn(r)["value"] == pytest.approx(fn(fresh)["value"])
     assert np.array_equal(r.n_candidates, [3, 3, 5])

@@ -8,10 +8,9 @@ import numpy as np
 import polars as pl
 import pytest
 from conftest import RAW_DIR, needs_raw
-from scipy import stats
 
 from cp4285_proj.config import DataConfig
-from cp4285_proj.data.preprocess import build_split, read_raw, sparse_spearman, write_split
+from cp4285_proj.data.preprocess import build_split, read_raw, write_split
 
 pytestmark = needs_raw
 LABEL_COLUMNS = ["is_click", "is_like", "is_follow", "is_comment", "is_forward", "is_hate", "long_view", "play_time_ms"]
@@ -87,32 +86,12 @@ def _frames_equal(a: pl.DataFrame, b: pl.DataFrame) -> bool:
     return a.equals(b, null_equal=True)
 
 
-def test_train_metadata_ignores_calibration_and_test_labels(raw, built):
+def test_metadata_ignores_calibration_and_test_labels(raw, built):
     users = built.frames["users"]
     random_user_ids = users.filter(pl.col("role") != "train_only")["user_id"].to_numpy()
     perturbed = build_split(_perturb_labels(raw[0], random_user_ids, seed=1), DataConfig())
     assert _frames_equal(perturbed.frames["users"], users)
-    assert _frames_equal(perturbed.frames["items"].drop("is_clickbait"), built.frames["items"].drop("is_clickbait"))
-    # sanity: the perturbation did reach calibration labels, so is_clickbait (calibration-defined) moves
-    assert not perturbed.frames["items"]["is_clickbait"].equals(built.frames["items"]["is_clickbait"])
-
-
-def test_clickbait_ignores_test_labels(raw, built):
-    test_user_ids = built.frames["users"].filter(pl.col("role") == "test")["user_id"].to_numpy()
-    perturbed = build_split(_perturb_labels(raw[0], test_user_ids, seed=2), DataConfig())
     assert _frames_equal(perturbed.frames["items"], built.frames["items"])
-    assert _frames_equal(perturbed.frames["users"], built.frames["users"])
+    # sanity: the perturbation did reach the random-log labels
+    assert not perturbed.frames["calibration"]["click"].equals(built.frames["calibration"]["click"])
     assert not perturbed.frames["test"]["click"].equals(built.frames["test"]["click"])
-
-
-@pytest.mark.parametrize("seed", [0, 1])
-def test_sparse_spearman_matches_scipy_on_dense_vectors(seed):
-    rng = np.random.default_rng(seed)
-    n_users, n_items = 6, 40
-    dense = rng.poisson(0.4, size=(n_users, n_items)) * rng.integers(1, 4, size=(n_users, n_items))
-    dense[0, :5] = [3, 1, 1, 2, 1]
-    reference = rng.integers(0, 6, size=n_items)  # many ties, like popularity counts
-    u, i = np.nonzero(dense)
-    got = sparse_spearman(u, i, dense[u, i], reference, n_users)
-    for row in range(n_users):
-        assert got[row] == pytest.approx(stats.spearmanr(dense[row], reference).statistic)

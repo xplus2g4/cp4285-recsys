@@ -34,11 +34,7 @@ ITEMS_SCHEMA: dict[str, pl.DataType] = {
     "duration_ms": pl.Int64(),
     "pop_exposure": pl.Int32(),
     "pop_play": pl.Int32(),
-    "pop_bin": pl.Int8(),
-    "dur_bin": pl.Int8(),
-    "is_head": pl.Boolean(),
     "is_cold": pl.Boolean(),
-    "is_clickbait": pl.Boolean(),
 }
 
 USERS_SCHEMA: dict[str, pl.DataType] = {
@@ -47,13 +43,6 @@ USERS_SCHEMA: dict[str, pl.DataType] = {
     "role": pl.String(),
     "n_train_rows": pl.Int32(),
     "n_train_items": pl.Int32(),
-    "activity_group": pl.String(),
-    "mainstream_score": pl.Float32(),
-    "mainstream_group": pl.String(),
-    "dur_pref_ms": pl.Float32(),
-    "dur_pref_group": pl.String(),
-    "hist_pop_dist": pl.List(pl.Float32()),
-    "hist_dur_dist": pl.List(pl.Float32()),
 }
 
 # Categorical side features (spec §4.2 step 9). Every column is an Int32 code: 0 = missing, 1..K = the sorted
@@ -80,14 +69,6 @@ SCHEMAS = {
     "users": USERS_SCHEMA,
     "user_features": USER_FEATURES_SCHEMA,
     "item_features": ITEM_FEATURES_SCHEMA,
-}
-
-NO_HISTORY = "no_history"
-GROUPINGS = {"activity": "activity_group", "mainstream": "mainstream_group", "dur_pref": "dur_pref_group"}
-GROUP_LEVELS = {
-    "activity": ("high", "full", "middle", "other"),
-    "mainstream": ("low", "mid", "high", NO_HISTORY),
-    "dur_pref": ("short", "mid", "long", NO_HISTORY),
 }
 
 
@@ -187,6 +168,6 @@ class CSRMask:
 
 
 def load_seen_mask(directory: Path, n_users: int) -> CSRMask:
-    """Train items per user (for top-K masking and RSP's "un-interacted")."""
+    """Train items per user (for top-K masking)."""
     train = pl.read_parquet(directory / "train.parquet", columns=["user_idx", "item_idx"])
     return CSRMask.from_pairs(train["user_idx"].to_numpy(), train["item_idx"].to_numpy(), n_users)

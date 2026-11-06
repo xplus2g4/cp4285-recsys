@@ -26,8 +26,6 @@ class ItemTensors:
     """Train-derived item metadata on device, indexed by item_idx."""
 
     pop_exposure: torch.Tensor  # int64 [n_items]
-    pop_bin: torch.Tensor  # int64 [n_items]
-    dur_bin: torch.Tensor  # int64 [n_items]
     duration_ms: torch.Tensor  # int64 [n_items]
 
 
@@ -56,7 +54,7 @@ class TrainData:
     item: torch.Tensor  # int64 [N]
     target: torch.Tensor  # float32 [N]; the training label (soft target for watch_ratio)
     extras: dict[str, torch.Tensor]  # other label columns, time, tab: for future weighting hooks
-    items: ItemTensors  # pop_exposure, pop_bin, dur_bin, duration_ms on device, indexed by item_idx
+    items: ItemTensors  # pop_exposure, duration_ms on device, indexed by item_idx
     user_features: torch.Tensor  # int64 [n_users, F_u] categorical codes (0 = missing), schema.USER_FEATURES order
     item_features: torch.Tensor  # int64 [n_items, F_i] categorical codes (0 = missing), schema.ITEM_FEATURES order
     n_users: int
@@ -162,7 +160,7 @@ class TorchRecommender(Recommender):
     # hooks (defaults are the naive behaviour)
     def batch_loss(self, batch: Batch) -> torch.Tensor:
         """Training loss of one batch. Override when the training-time score is not the backbone logit
-        (PDA's popularity term, MACR's branches) or the target is transformed (D2Q)."""
+        (MACR's branches) or the target is transformed (D2Q)."""
         return self.loss(self.backbone(batch.user, batch.item), batch.target, self.sample_weight(batch))
 
     def sample_weight(self, batch: Batch) -> torch.Tensor | None:  # default None → unweighted
