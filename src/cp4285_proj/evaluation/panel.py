@@ -68,7 +68,7 @@ class Panel:
 
 
 def instance_id(name: str, params: dict[str, Any]) -> str:
-    """`ndcg@10[click]`, `rsp_pop@20`, `ndcg_by_group@10[click|mainstream]`, `gauc[click]`."""
+    """`ndcg@10[click]`, `arp@20`, `gauc[click]`; parameters other than k and label are appended to the tag."""
     out = name + (f"@{params['k']}" if "k" in params else "")
     tags = ([str(params["label"])] if "label" in params else []) + [
         str(params[p]) for p in sorted(params) if p not in ("k", "label")
@@ -191,7 +191,7 @@ def user_weights(m: MetricDef, b: EvalBundle) -> np.ndarray | None:
 
 
 def scalarize(inst: MetricInstance, value: dict[str, float]) -> dict[str, float]:
-    """Global/per-group dict → flat scalar names: `id` for {"value": v}, else `id.key`."""
+    """Global dict → flat scalar names: `id` for {"value": v}, else `id.key`."""
     if set(value) == {"value"}:
         return {inst.id: float(value["value"])}
     return {f"{inst.id}.{k}": float(v) for k, v in value.items()}

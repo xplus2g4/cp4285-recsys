@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import pytest
 
@@ -17,13 +19,19 @@ def _spy(b, *, k):
     return np.zeros(len(b.users))
 
 
+@register_metric("_spy_mode_metric", kind="global", params={"k": int, "mode": Literal["a", "b"]}, needs_label=True)
+def _spy_mode(b, *, k, label, mode):
+    CALLS.append("called")
+    return {"value": 0.0}
+
+
 BASE = {
     "eval_labels": ["click", "long_view", "watch_ratio", "raw_watch_time", "satisfaction"],
     "metric": [
         {"name": "_spy_test_metric", "k": 10},
         {"name": "gauc", "labels": "all"},
         {"name": "ndcg", "k": [10, 20], "labels": "all"},
-        {"name": "ndcg_by_group", "k": 10, "labels": ["click"], "grouping": ["activity", "mainstream"]},
+        {"name": "_spy_mode_metric", "k": 10, "labels": ["click"], "mode": ["a", "b"]},
     ],
 }
 
@@ -41,7 +49,7 @@ def _with(entry):
         ({"name": "ndcg", "k": 10, "labels": ["clicks"]}, "unknown label"),
         ({"name": "gauc", "labels": ["raw_watch_time"]}, "binary relevance"),
         ({"name": "arp", "k": 10, "labels": "all"}, "unknown parameter"),
-        ({"name": "ndcg_by_group", "k": 10, "labels": "all", "grouping": "age"}, "not in"),
+        ({"name": "_spy_mode_metric", "k": 10, "labels": "all", "mode": "c"}, "not in"),
         ({"name": "arp", "k": 0}, "k must be"),
     ],
 )
@@ -68,7 +76,7 @@ def test_expansion_ids_and_relevance_skipping():
     ids = {i.id for i in parse_panel(BASE).instances}
     assert {"gauc[click]", "gauc[long_view]", "gauc[watch_ratio]", "gauc[satisfaction]"} <= ids
     assert "gauc[raw_watch_time]" not in ids  # no binary relevance → skipped under labels = "all"
-    assert {"ndcg@10[raw_watch_time]", "ndcg@20[click]", "ndcg_by_group@10[click|mainstream]", "_spy_test_metric@10"} <= ids
+    assert {"ndcg@10[raw_watch_time]", "ndcg@20[click]", "_spy_mode_metric@10[click|b]", "_spy_test_metric@10"} <= ids
     assert len(ids) == 1 + 4 + 10 + 2
 
 

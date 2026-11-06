@@ -9,19 +9,16 @@ random-exposure log.
 
 | Name | Method | Experiment files | Frontier knob (one sweep per value) |
 |---|---|---|---|
-| `mf` | Naive MF; on `raw_watch_time` the VR regression baseline (spec §13.2) | `mf_<label>.toml` | — |
-| `pda` | PD / PDA (Zhang et al. SIGIR '21), spec §13.1 | `pda_click.toml` | `--model.gamma g` with `--model.gamma_infer 0` (PD) or `g` (PDA) |
-| `d2q` | D2Q (Zhan et al. KDD '22), spec §13.2 | `d2q_raw_watch_time.toml` | `--model.n_groups M` with `--model.rank_by watch_time` (D2Q) or `quantile` |
-| `ips` | IPS, popularity propensity (Schnabel et al. ICML '16), spec §13.3 | `ips_click.toml` | `--model.clip c` |
-| `snips` | SNIPS, IPS weights with batch self-normalisation (Swaminathan & Joachims NeurIPS '15), spec §13.4 | `snips_click.toml` | `--model.clip c` |
-| `macr` | MACR (Wei et al. KDD '21), spec §13.5 | `macr_click.toml` | `--model.c c` |
-| `ips_feature` | IPS, feature-based (FM) propensity, spec §13.6 | `ips_feature_click.toml` | `--model.clip c` |
+| `mf` | Naive MF; on `raw_watch_time` the VR regression baseline (spec §13.2) | `mf_click.toml`, `mf_raw_watch_time.toml` | — |
+| `macr` | MACR (Wei et al. KDD '21), popularity correction, spec §13.1 | `macr_click.toml` | `--model.c c` |
+| `d2q` | D2Q (Zhan et al. KDD '22), duration correction, spec §13.2 | `d2q_raw_watch_time.toml` | `--model.n_groups M` with `--model.rank_by watch_time` (D2Q) or `quantile` |
+| `ips_feature` | IPS with a feature-based (FM) propensity (Schnabel et al. ICML '16), exposure correction, spec §13.3 | `ips_feature_click.toml` | `--model.clip c` |
 
 Training labels without a binary relevance (`raw_watch_time`) are selected by calibration NDCG@10 instead of GAUC.
 
 Every method tunes the shared MF backbone on the same `lr × weight_decay` grid. A frontier point is one
 `kr-sweep` with the knob fixed on the command line, e.g.
-`uv run kr-sweep configs/experiments/pda_click.toml --model.gamma 0.1 --model.gamma_infer 0.1`.
+`uv run kr-sweep configs/experiments/macr_click.toml --model.c 20`.
 
 ## Setup
 
@@ -64,22 +61,22 @@ which reuses `pred/` and writes results under a new panel hash.
   `src/cp4285_proj/metrics/` (new modules must be added to `_ensure_builtins` in `metrics/registry.py`):
 
   ```python
-  @register_metric("head_share", kind="per_user", params={"k": int}, needs_label=False)
-  def head_share(b: EvalBundle, *, k: int) -> np.ndarray:
-      return b.items.is_head[b.topk[:, :k]].mean(1, dtype=np.float64)
+  @register_metric("mean_duration", kind="per_user", params={"k": int}, needs_label=False)
+  def mean_duration(b: EvalBundle, *, k: int) -> np.ndarray:
+      return b.items.duration_ms[b.topk[:, :k]].mean(1, dtype=np.float64) / 1000.0
   ```
 
   ```toml
   [[metric]]
-  name = "head_share"
+  name = "mean_duration"
   k = [10, 20]
   ```
 
-  Kinds: `per_user` returns a `[U]` float array (NaN = user excluded); `global` returns `dict[str, float]`;
-  `per_group` returns group → value plus `"gap"`. `needs_label=True` adds a `labels` parameter
-  (`"all"` or a list); `needs_relevance=True` restricts it to labels with a binary relevance; `weight="candidates"`
-  aggregates a per-user metric weighted by candidate count (as GAUC does). Per-user quantities that global or
-  per-group metrics reuse should go through `b.user_cache(key, fn)` so the bootstrap stays fast.
+  Kinds: `per_user` returns a `[U]` float array (NaN = user excluded); `global` returns `dict[str, float]`.
+  `needs_label=True` adds a `labels` parameter (`"all"` or a list); `needs_relevance=True` restricts it to labels
+  with a binary relevance; `weight="candidates"` aggregates a per-user metric weighted by candidate count (as GAUC
+  does). Per-user quantities that other metrics reuse should go through `b.user_cache(key, fn)` so the bootstrap
+  stays fast.
 
 Validation runs before anything is computed: unknown metric names, unknown or missing parameters, unknown labels,
 and `k` beyond the saved top-K width (the error names the `kr-rescore` command) all fail immediately.
@@ -101,7 +98,7 @@ and `k` beyond the saved top-K width (the error names the `kr-rescore` command) 
        def build_backbone(self, n_users, n_items):
            return MFBackbone(n_users, n_items, self.model_cfg.embedding_dim)
 
-       # override only what the method changes: batch_loss, sample_weight, loss, adjust_scores (PDA: batch_loss + adjust_scores)
+       # override only what the method changes: batch_loss, sample_weight, loss, adjust_scores (MACR: batch_loss + adjust_scores)
    ```
 
    Anything that is not a `TorchRecommender` only has to satisfy the `Recommender` protocol in

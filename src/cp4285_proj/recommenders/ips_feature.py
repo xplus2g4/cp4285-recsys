@@ -1,4 +1,7 @@
-"""IPS with a feature-based propensity (Schnabel et al., ICML '16, §5) on the MF backbone (spec §13.6).
+"""IPS with a feature-based propensity (Schnabel et al., ICML '16, §5) on the MF backbone (spec §13.3).
+
+Each logged exposure is weighted by its inverse exposure propensity, so the weighted training loss estimates the
+loss under uniform item exposure, the condition of the random-exposure log.
 
 The propensity model is a factorization machine (Rendle, ICDM '10) over the user and item categorical side
 features. It uses no ids, so it cannot reproduce item popularity directly. In `fit` it learns to tell logged
@@ -6,8 +9,11 @@ train exposures (u, i) from counterfactual ones (u, j), with j uniform over the 
 row, redrawn every epoch. With 1:1 sampling its odds estimate the density ratio P_log(i | u) / P_uniform(i | u),
 so a row's inverse propensity is exp(−logit). Because each negative shares the positive's user, user-only terms
 cannot separate the classes. User features therefore act through their interactions with item features, and the
-propensity is user-dependent, unlike the popularity propensity. Weights, clipping and the loss are IPS's
-(spec §13.3).
+propensity is user-dependent, unlike a popularity propensity.
+
+Weights: w = 1/p, rescaled so that the smallest weight is 1, clipped at `clip` (Strehl et al. 2010; the
+bias–variance trade-off of Schnabel et al. Thm 5.2), then divided by their train mean. Because the train mean is a
+constant, the IPS loss mean(w·ℓ) keeps the unbiased estimator's normaliser fixed.
 """
 
 from __future__ import annotations
@@ -20,8 +26,8 @@ import torch
 from scipy import stats
 from torch import nn
 
-from cp4285_proj.recommenders.base import FitContext, TrainData
-from cp4285_proj.recommenders.ips import IPS
+from cp4285_proj.recommenders.base import Batch, FitContext, FitResult, TrainData
+from cp4285_proj.recommenders.naive_mf import NaiveMF
 from cp4285_proj.recommenders.registry import register_recommender
 
 PROPENSITY_BATCH = 65536
@@ -31,7 +37,7 @@ AUC_SAMPLE = 200_000  # logged rows (and as many fresh uniform negatives) for th
 @dataclass(frozen=True)
 class IPSFeatureModelConfig:
     embedding_dim: int = 64
-    clip: float = math.inf  # as in IPS: largest weight relative to the smallest; inf = no clipping
+    clip: float = math.inf  # largest weight relative to the smallest, before the mean normalisation; inf = no clipping
     propensity_dim: int = 8  # FM factor size
     propensity_epochs: int = 15  # the FM loss plateaus by then on guarded (1.2123 at 10, 1.2065 at 15)
     propensity_lr: float = 1e-2
@@ -55,16 +61,43 @@ class FeatureFM(nn.Module):
         return self.b + self.w[idx].sum(1) + pairwise
 
 
+def ips_weights(inverse_propensity: torch.Tensor, clip: float) -> tuple[torch.Tensor, dict[str, float]]:
+    """Row weights (train mean 1) and their diagnostics: max weight, effective sample size share, clipped share."""
+    w = inverse_propensity.double() / inverse_propensity.min()
+    clipped = w > clip
+    w = w.clamp(max=clip)
+    w = w / w.mean()
+    diagnostics = {
+        "ips_max_weight": float(w.max()),
+        "ips_ess_share": float(w.sum() ** 2 / (w**2).sum() / len(w)),
+        "ips_clipped_share": float(clipped.double().mean()),
+    }
+    return w.float(), diagnostics
+
+
 def _auc(pos: np.ndarray, neg: np.ndarray) -> float:
     ranks = stats.rankdata(np.r_[pos, neg])
     return float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)))
 
 
 @register_recommender("ips_feature")
-class IPSFeature(IPS):
+class IPSFeature(NaiveMF):
     model_config_cls = IPSFeatureModelConfig
+    supported_labels = ("click", "long_view", "satisfaction", "watch_ratio")
+
+    def fit(self, train: TrainData, ctx: FitContext) -> FitResult:
+        self._weight, diagnostics = ips_weights(self.inverse_propensity(train, ctx), self.model_cfg.clip)
+        ctx.log.log_metrics(diagnostics)
+        return super().fit(train, ctx)
+
+    def sample_weight(self, batch: Batch) -> torch.Tensor:
+        return self._weight[batch.idx]
+
+    def loss(self, logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor | None) -> torch.Tensor:
+        return (nn.functional.binary_cross_entropy_with_logits(logits, target, reduction="none") * weight).mean()
 
     def inverse_propensity(self, train: TrainData, ctx: FitContext) -> torch.Tensor:
+        """1/p per train row, up to a constant factor: exp(−logit) of the FM propensity model."""
         cfg, device = self.model_cfg, ctx.device
         cardinalities = (torch.cat([train.user_features.max(0).values, train.item_features.max(0).values]) + 1).tolist()
 

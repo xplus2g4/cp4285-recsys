@@ -1,4 +1,4 @@
-"""MACR counterfactual inference (spec §13.5)."""
+"""MACR counterfactual inference (spec §13.1)."""
 
 from __future__ import annotations
 

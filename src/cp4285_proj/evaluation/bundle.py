@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -11,7 +10,6 @@ import numpy as np
 import polars as pl
 
 from cp4285_proj.data.labels import LABELS, LabelSpec
-from cp4285_proj.data.schema import GROUPINGS, CSRMask
 
 
 @dataclass(frozen=True)
@@ -20,19 +18,10 @@ class ItemMeta:
 
     duration_ms: np.ndarray
     pop_exposure: np.ndarray
-    pop_bin: np.ndarray
-    dur_bin: np.ndarray
-    is_head: np.ndarray
-    is_clickbait: np.ndarray
 
     @classmethod
     def from_frame(cls, items: pl.DataFrame) -> ItemMeta:
         return cls(**{f: items[f].to_numpy() for f in cls.__dataclass_fields__})
-
-    @functools.cached_property
-    def duration_order(self) -> np.ndarray:
-        """argsort(duration_ms), shared by every resample."""
-        return np.argsort(self.duration_ms, kind="stable")
 
 
 def segment_index(starts: np.ndarray, counts: np.ndarray) -> np.ndarray:
@@ -52,10 +41,7 @@ class EvalBundle:
     cand_labels: dict[str, np.ndarray]  # label name → [R] values
     labels: dict[str, LabelSpec]  # kind, binary relevance fn
     topk: np.ndarray  # [U, K_max] item_idx
-    seen: CSRMask  # per user: train items (for "un-interacted" in RSP)
     items: ItemMeta  # numpy arrays by item_idx
-    user_groups: dict[str, np.ndarray]  # "activity" | "mainstream" | "dur_pref" → [U] group labels
-    hist_dist: dict[str, np.ndarray]  # "pop" | "dur" → [U, 5]; NaN rows for no_history
     n_items: int
 
     # resampling bookkeeping (not part of the metric contract)
@@ -91,10 +77,7 @@ class EvalBundle:
             cand_labels={k: v[rows] for k, v in root.cand_labels.items()},
             labels=root.labels,
             topk=root.topk[pos],
-            seen=root.seen,
             items=root.items,
-            user_groups={k: v[pos] for k, v in root.user_groups.items()},
-            hist_dist={k: v[pos] for k, v in root.hist_dist.items()},
             n_items=root.n_items,
             _root=root,
             _pos=pos,
@@ -123,10 +106,8 @@ def build_bundle(
     part: pl.DataFrame,
     topk: pl.DataFrame,
     items: pl.DataFrame,
-    users: pl.DataFrame,
-    seen: CSRMask,
 ) -> EvalBundle:
-    """Join saved predictions with the part's labels and user/item metadata.
+    """Join saved predictions with the part's labels and item metadata.
 
     `candidates`: row_id, user_idx, item_idx, score. `part`: the split part (labels by row_id).
     `topk`: user_idx, rank, item_idx, score (long format).
@@ -142,18 +123,6 @@ def build_bundle(
     top_users = top["user_idx"].unique(maintain_order=True).to_numpy()
     if not np.array_equal(top_users, bundle_users) or top.height != len(bundle_users) * k_max:
         raise ValueError(f"{split}: topk.parquet users do not match the candidate users")
-    meta = users.sort("user_idx")
-    if not np.array_equal(meta["user_idx"].to_numpy(), np.arange(meta.height)):
-        raise ValueError("users.parquet must be dense and sorted by user_idx")
-    sub = meta[bundle_users]
-
-    def dist(col: str) -> np.ndarray:
-        out = np.full((len(bundle_users), 5), np.nan)
-        lists = sub[col].to_list()
-        for j, v in enumerate(lists):
-            if v is not None:
-                out[j] = v
-        return out
 
     return EvalBundle(
         split=split,
@@ -164,10 +133,7 @@ def build_bundle(
         cand_labels={c: joined[c].to_numpy() for c in label_cols},
         labels=dict(LABELS),
         topk=top["item_idx"].to_numpy().reshape(len(bundle_users), k_max),
-        seen=seen,
         items=ItemMeta.from_frame(items.sort("item_idx")),
-        user_groups={g: sub[c].to_numpy().astype(str) for g, c in GROUPINGS.items()},
-        hist_dist={"pop": dist("hist_pop_dist"), "dur": dist("hist_dur_dist")},
         n_items=items.height,
     )
 

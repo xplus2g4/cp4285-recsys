@@ -2,8 +2,7 @@
 
 Return types by kind:
   per_user  → np.ndarray float64 [U] aligned with bundle.users; NaN = user excluded for this metric
-  global    → dict[str, float]  (one or more named values, e.g. {"value": g} or {"mean": …, "delta_mean": …})
-  per_group → dict[str, float]  group name → value, plus "gap" (max − min over groups other than no_history)
+  global    → dict[str, float]  (one or more named values, e.g. {"value": g})
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from typing import Any, Literal
 
 from cp4285_proj.evaluation.bundle import EvalBundle, ItemMeta  # noqa: F401  (re-exported contract types)
 
-MetricKind = Literal["per_user", "global", "per_group"]
+MetricKind = Literal["per_user", "global"]
 Weighting = Literal["uniform", "candidates"]
 
 
@@ -55,7 +54,7 @@ def register_metric(
 
 
 def _ensure_builtins() -> None:
-    from cp4285_proj.metrics import accuracy, clickbait, coverage, duration, groups, popularity  # noqa: F401
+    from cp4285_proj.metrics import accuracy, duration, exposure, popularity  # noqa: F401
 
 
 def get_metric(name: str) -> MetricDef:
