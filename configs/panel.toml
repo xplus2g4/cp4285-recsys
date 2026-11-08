@@ -20,6 +20,10 @@ name = "ndcg"
 k = [10, 20]
 labels = "all"
 
+[[metric]]
+name = "xgauc"
+labels = ["raw_watch_time"]
+
 # --- popularity
 [[metric]]
 name = "arp"

@@ -1,4 +1,4 @@
-"""Accuracy within each user's random candidate set: GAUC and NDCG@k (spec §7.3)."""
+"""Accuracy within each user's random candidate set: GAUC, XGAUC and NDCG@k (spec §7.3)."""
 
 from __future__ import annotations
 
@@ -47,6 +47,33 @@ def gauc_value(pos: np.ndarray, score: np.ndarray, rel: np.ndarray, n_users: int
 @register_metric("gauc", kind="per_user", params={}, needs_label=True, needs_relevance=True, weight="candidates")
 def gauc(b: EvalBundle, *, label: str) -> np.ndarray:
     return per_user_auc(b.cand_user_pos, b.cand_score, relevance(b, label), len(b.users))
+
+
+def per_user_xauc(pos: np.ndarray, score: np.ndarray, value: np.ndarray, n_users: int) -> np.ndarray:
+    """XAUC within each user (Zhan et al. KDD '22): the share of candidate pairs with different `value` that
+    `score` orders the same way; score ties count ½.
+
+    NaN for users without such a pair.
+    """
+    order = np.argsort(pos, kind="stable")
+    counts, starts = _user_starts(pos, n_users)
+    s_all, v_all = score[order], value[order]
+    out = np.full(n_users, np.nan)
+    for u in np.flatnonzero(counts > 1):
+        lo, hi = starts[u], starts[u] + counts[u]
+        s, v = s_all[lo:hi], v_all[lo:hi]
+        ordered = v[:, None] > v[None, :]  # each pair with different values, counted once
+        n_pairs = ordered.sum()
+        if n_pairs:
+            ds = (s[:, None] - s[None, :])[ordered]
+            out[u] = ((ds > 0).sum() + 0.5 * (ds == 0).sum()) / n_pairs
+    return out
+
+
+@register_metric("xgauc", kind="per_user", params={}, needs_label=True, weight="candidates")
+def xgauc(b: EvalBundle, *, label: str) -> np.ndarray:
+    """XGAUC = Σ_u |C_u|·XAUC_u / Σ_u |C_u| (Zhan et al. KDD '22: per-user XAUC weighted by user sample size)."""
+    return per_user_xauc(b.cand_user_pos, b.cand_score, b.cand_labels[label].astype(np.float64), len(b.users))
 
 
 def per_user_ndcg(pos: np.ndarray, score: np.ndarray, gain: np.ndarray, n_users: int, k: int, minmax: bool) -> np.ndarray:

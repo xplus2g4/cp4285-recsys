@@ -499,6 +499,7 @@ Notation:
 | Id | Kind | Params | Definition |
 |---|---|---|---|
 | `gauc` | per_user → aggregated with candidate-count weights | label | AUC of `score` against `rel` within `C_u`. NaN if `C_u` has only one class. The aggregate is GAUC = Σ_u \|C_u\|·AUC_u / Σ_u \|C_u\| over non-NaN users. Labels with no binary relevance (`raw_watch_time`) are skipped. |
+| `xgauc` | per_user → aggregated with candidate-count weights | label | XAUC (Zhan et al. KDD '22) within `C_u`: the share of row pairs with different label values that `score` orders the same way; score ties count ½. NaN if all label values in `C_u` are equal. The aggregate is XGAUC = Σ_u \|C_u\|·XAUC_u / Σ_u \|C_u\| over non-NaN users. The panel uses it on `raw_watch_time`. |
 | `ndcg` | per_user | k, label | NDCG@k ranking `C_u` by score. The gain is the label value: 0/1, capped watch ratio, or `raw_watch_time` min-max scaled within the user. The ideal is taken over `C_u`. Lists are truncated at min(k, \|C_u\|). NaN if every gain is 0 or every gain is equal. |
 | `arp` | per_user | k | mean over i ∈ `L_u` of pop(i) |
 | `aplt` | per_user | k | share of `L_u` with `¬is_head` |
@@ -587,7 +588,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 9. `kr-evaluate <final_run> --split test` writes the test predictions and the panel output. Evaluating a non-final run on test raises an error. A second test evaluation warns and records `test_eval_count = 2`.
 10. Adding a `[[metric]]` entry for a newly registered function, or deleting an entry, then rerunning `kr-evaluate`, gives results under a new panel hash. No retraining and no rescoring happen, because the existing `pred/` files are reused.
 11. An unknown metric name, an unknown parameter, `k > K_max` or an unknown label in `panel.toml` fails before any metric is computed.
-12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini`, `rsp`/`reo`, `calibration_kl` (including smoothing) and `wasserstein_duration`.
+12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `xgauc` (score ties, equal-label exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini`, `rsp`/`reo`, `calibration_kl` (including smoothing) and `wasserstein_duration`.
 13. `kr-evaluate --sweep <id> --split test` writes the mean ± std over the 5 seeds and a 95% bootstrap CI for every panel instance.
 14. `kr-rescore <run_id> --k 200` rewrites `topk.parquet` with 200 columns, and a panel entry with `k = 200` then passes validation.
 

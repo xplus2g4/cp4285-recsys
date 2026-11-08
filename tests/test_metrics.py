@@ -10,7 +10,7 @@ import pytest
 from conftest import make_bundle
 
 from cp4285_proj.evaluation.panel import parse_panel, run_panel
-from cp4285_proj.metrics.accuracy import gauc, gauc_value, ndcg
+from cp4285_proj.metrics.accuracy import gauc, gauc_value, ndcg, xgauc
 from cp4285_proj.metrics.duration import list_duration, wasserstein_duration
 from cp4285_proj.metrics.groups import calibration_kl_pop, ndcg_by_group
 from cp4285_proj.metrics.popularity import gini, gini_coefficient, reo_pop, rsp_pop
@@ -48,6 +48,28 @@ def test_gauc_aggregate_is_candidate_count_weighted():
     assert res.scalars["gauc[click]"] == pytest.approx(expected)
     assert res.n_excluded["gauc[click]"] == 1
     assert gauc_value(b.cand_user_pos, b.cand_score, b.cand_labels["click"] == 1, 3) == pytest.approx(expected)
+
+
+# --------------------------------------------------------------------------- xgauc
+
+
+def test_xgauc_pairs_ties_and_weighting():
+    # u0: watch times 1000 < 2000 < 3000; scores order (3000, 1000) and (2000, 1000) right, tie (3000, 2000) → 2.5 / 3
+    # u1: equal watch times → no ordered pair, excluded
+    # u2: 2000 > 1000 but scored lower → 0
+    b = make_bundle(
+        cand_user_pos=[0, 0, 0, 1, 1, 2, 2],
+        cand_item=[0, 1, 2, 0, 1, 0, 1],
+        cand_score=[0.1, 0.9, 0.9, 0.3, 0.6, 0.9, 0.1],
+        topk=np.zeros((3, 2), dtype=int),
+        labels={"raw_watch_time": [1000, 3000, 2000, 5, 5, 1000, 2000]},
+    )
+    x = xgauc(b, label="raw_watch_time")
+    assert x[0] == pytest.approx(2.5 / 3)
+    assert np.isnan(x[1])
+    assert x[2] == 0.0
+    res = run_panel(parse_panel({"metric": [{"name": "xgauc", "labels": ["raw_watch_time"]}]}), b)
+    assert res.scalars["xgauc[raw_watch_time]"] == pytest.approx((3 * 2.5 / 3 + 2 * 0.0) / 5)
 
 
 # --------------------------------------------------------------------------- ndcg
