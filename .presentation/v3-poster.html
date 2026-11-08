@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Squeeze the Balloon: When Debiasing Shifts Bias Elsewhere: A1 poster</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,800;1,9..144,400;1,9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<!--
+  Merger for the A1 poster. Each section lives in poster/*.html (its markup, its CSS, its chart script);
+  this file holds the shared tokens, helpers and layout, and splices the parts in at each data-part slot.
+  Parts are fetched, so serve this folder over HTTP:  python -m http.server -d .presentation  → /v3-poster.html
+-->
+<style>
+  @page { size: 841mm 1189mm; margin: 0; }
+  :root {
+    --paper: #ffffff; --ink: #111418; --sub: #5f6670; --rule: #111418; --soft: #e5e7eb;
+    --pop: #e8452c; --exp: #0f766e; --dur: #c98200; --acc: #3d4450;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: var(--paper); }
+  .poster { width: 3178px; height: 4494px; padding: 110px 150px 90px; overflow: hidden;
+    color: var(--ink); font-family: Inter, sans-serif; font-size: 46px; line-height: 1.4;
+    display: flex; flex-direction: column; gap: 30px; background: var(--paper); }
+  .mono { font-family: "IBM Plex Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
+  h2 { font-family: Fraunces; font-weight: 800; font-size: 88px; letter-spacing: -2px; line-height: 1; white-space: nowrap; }
+  .sec-head { display: flex; justify-content: space-between; align-items: baseline; gap: 40px; border-top: 3px solid var(--rule); padding-top: 28px; margin-bottom: 20px; }
+  .sec-head .mono { font-size: 31px; color: var(--sub); text-align: right; }
+  .note { font-size: 29px; color: var(--sub); line-height: 1.4; }
+  /* data analysis | methodology, side by side */
+  .dm { display: grid; grid-template-columns: 1.1fr 1fr; gap: 90px; align-items: start; }
+  .dm .sec-head { margin-bottom: 14px; }
+  .dm .sec-head .mono { font-size: 28px; }
+  .dm p, .dm li, .dm td { font-size: 31px; line-height: 1.34; }
+  /* takeaways | limitations, side by side */
+  .bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 90px; align-items: start; border-top: 3px solid var(--rule); padding-top: 30px; }
+  .bottom h4 { font-family: "IBM Plex Mono"; font-size: 36px; letter-spacing: .1em; text-transform: uppercase; color: var(--pop); margin-bottom: 14px; }
+  .bottom li { font-size: 37px; line-height: 1.36; }
+  .bottom ol { padding-left: 0; list-style: none; counter-reset: k; display: grid; gap: 22px; }
+  .bottom ol li { counter-increment: k; display: grid; grid-template-columns: 66px 1fr; }
+  .bottom ol li::before { content: counter(k); font-family: Fraunces; font-weight: 800; font-size: 70px; line-height: .9; color: var(--pop); }
+  svg text { font-family: Inter, sans-serif; }
+  .part-error { color: var(--pop); font-family: "IBM Plex Mono", monospace; font-size: 40px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div class="poster">
+  <div data-part="poster/masthead.html"></div>
+  <div data-part="poster/lede.html"></div>
+  <section class="dm">
+    <div data-part="poster/data.html"></div>
+    <div data-part="poster/methodology.html"></div>
+  </section>
+  <div data-part="poster/audit.html"></div>
+  <div data-part="poster/rq3.html"></div>
+  <section class="bottom">
+    <div data-part="poster/takeaways.html"></div>
+    <div data-part="poster/limitations.html"></div>
+  </section>
+  <div data-part="poster/footer.html"></div>
+</div>
+<script src="assets/data.js"></script>
+<script>
+// ---- shared by every part's script ----
+// D2Q-Q (our quantile-ranking variant of D2Q) is not on the poster.
+const R = window.RESULTS, S = R.sweeps.filter((r) => r.method !== "d2q_q"), F = R.facts;
+const css = getComputedStyle(document.documentElement), C = (k) => css.getPropertyValue("--" + k).trim();
+const COL = { pop: C("pop"), exp: C("exp"), dur: C("dur"), acc: C("acc"), ink: C("ink"), sub: C("sub"), soft: C("soft") };
+
+const rec = (m, k = null) => S.find((r) => r.method === m && (k === null ? r.knob === null : String(r.knob) === String(k)));
+const mean = (r, key) => r.metrics[key].mean;
+const pct = (r, b, key) => (100 * (mean(r, key) - mean(b, key))) / mean(b, key);
+const sig = (r, key) => r.metrics[key].sig;
+const signed = (v, d = 0) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+const pc = (v) => signed(v, Math.abs(v) < 9.95 ? 1 : 0) + "%";
+const num = (v, d = 0) => v.toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
+const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const T = (x, y, s, o = {}) =>
+  `<text x="${x}" y="${y}" font-size="${o.size || 32}" fill="${o.fill || COL.ink}" text-anchor="${o.anchor || "start"}" font-weight="${o.weight || 400}"${o.family ? ` style="font-family:${o.family}"` : ""}>${esc(s)}</text>`;
+
+// ---- representative settings: the default rows of the audit matrix in index.html ----
+const naive = rec("naive_mf"), vr = rec("vr");
+const ROWS = [
+  { m: "macr", k: 40, name: "MACR", set: "c = 40", target: "pop", base: naive, acc: "ndcg@10[click]" },
+  { m: "ips_feat", k: 4000, name: "IPS-feat", set: "clip = 4000", target: "exp", base: naive, acc: "ndcg@10[click]" },
+  { m: "d2q", k: 60, name: "D2Q", set: "M = 60 · vs VR", target: "dur", base: vr, acc: "ndcg@10[raw_watch_time]" },
+].map((row) => ({ ...row, r: rec(row.m, row.k) }));
+
+const COLS = [
+  { key: "acc", title: "Accuracy", sub: "NDCG@10, own training label", metric: (row) => row.acc, better: +1, raw: (v) => v.toFixed(3) },
+  { key: "acc", title: "Watch time", sub: "XGAUC on raw watch time [5]", metric: () => "xgauc[raw_watch_time]", better: +1, raw: (v) => v.toFixed(3) },
+  { key: "pop", title: "Popularity", sub: "ARP@10: mean training exposures", metric: () => "arp@10", better: -1, raw: (v) => num(v) },
+  { key: "exp", title: "Exposure", sub: "coverage@10: videos shown", metric: () => "coverage@10", better: +1, raw: (v) => (100 * v).toFixed(2) + "%" },
+  { key: "dur", title: "Duration", sub: "JSD to clicked videos’ lengths [6]", metric: () => "jsd_dur@10[click]", better: -1, raw: (v) => v.toFixed(3) },
+];
+const cell = (row, col) => {
+  const key = col.metric(row), p = pct(row.r, row.base, key);
+  return { key, p, imp: col.better * p, sig: sig(row.r, key), from: mean(row.base, key), to: mean(row.r, key) };
+};
+
+// ---- splice the parts in: all markup first, then each part's scripts in document order ----
+(async () => {
+  const slots = [...document.querySelectorAll("[data-part]")];
+  const parts = await Promise.all(slots.map(async (slot) => {
+    const path = slot.dataset.part, res = await fetch(path, { cache: "no-store" });
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    const t = document.createElement("template");
+    t.innerHTML = await res.text();
+    return { slot, path, frag: t.content };
+  }));
+  const scripts = [];
+  for (const { slot, path, frag } of parts) {
+    frag.querySelectorAll("script").forEach((s) => { scripts.push({ path, code: s.textContent }); s.remove(); });
+    slot.replaceWith(frag);
+  }
+  for (const { path, code } of scripts) {
+    const s = document.createElement("script");
+    s.textContent = `${code}\n//# sourceURL=${path}`;
+    document.body.append(s);
+  }
+  // LaTeX: any part may write <span class="tex">…</span>, also from its script; errors render in red in place
+  document.querySelectorAll(".tex").forEach((el) => katex.render(el.textContent, el, { throwOnError: false }));
+})().catch((err) => {
+  document.querySelector(".poster").innerHTML = `<p class="part-error">Could not load poster parts: ${esc(err.message)}\n\n` +
+    `Parts are fetched, so open this file over HTTP, not file://:\n  python -m http.server -d .presentation\n  → http://localhost:8000/v3-poster.html</p>`;
+});
+</script>
+</body>
+</html>

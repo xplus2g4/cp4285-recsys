@@ -1,0 +1,60 @@
+<style>
+  .rq3 { display: grid; grid-template-columns: 1500px 1fr; gap: 90px; align-items: center; }
+  .rq3 p { font-size: 40px; line-height: 1.38; margin-bottom: 22px; }
+  .rq3 p:last-child { margin-bottom: 0; }
+</style>
+
+<section>
+  <div class="sec-head"><h2>Does fixing one bias move another?</h2></div>
+  <div class="rq3">
+    <div id="lengths"></div>
+    <div id="lengths-text"></div>
+  </div>
+</section>
+
+<script>
+// ---- coupling: length mix of the top-10 lists vs clicked videos on random exposure, with the per-user JSD ----
+{
+  const SH = (r, side) => [0, 1, 2, 3, 4].map((j) => mean(r, `dur_bin_share@10[click].${side}_${j}`));
+  const JSD = (r) => mean(r, "jsd_dur@10[click]");
+  const SHADE = ["#f7e9c6", "#ebc56f", "#c98200", "#8c5b00", "#4a3000"], INK = [COL.ink, COL.ink, "#fff", "#fff", "#fff"];
+  const items = [
+    ["Clicked", SH(naive, "ref"), COL.sub, null],
+    ["Naive MF", SH(naive, "list"), COL.ink, naive], ["MACR", SH(ROWS[0].r, "list"), COL.pop, ROWS[0].r], ["IPS-feat", SH(ROWS[1].r, "list"), COL.exp, ROWS[1].r],
+    ["VR", SH(vr, "list"), COL.ink, vr], ["D2Q", SH(ROWS[2].r, "list"), COL.dur, ROWS[2].r],
+  ];
+  const w = 1500, rowH = 64, top = 56, labelW = 230, jsdW = 150, bh = 48, x0 = labelW, x1 = w - jsdW, legY = top + items.length * rowH + 28;
+  const h = legY + 60;
+  let s = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`;
+  s += T(x0, top - 22, "share of top-10 slots by video length", { size: 30, fill: COL.sub });
+  s += T(w, top - 22, "JSD", { size: 30, fill: COL.sub, anchor: "end", family: "IBM Plex Mono" });
+  items.forEach(([l, sh, c, r], i) => {
+    const y = top + i * rowH + (rowH - bh) / 2;
+    s += T(0, y + bh / 2 + 13, l, { size: 40, fill: c, weight: 800, family: "Fraunces" });
+    let x = x0;
+    sh.forEach((v, j) => {
+      const bw = v * (x1 - x0 - 20);
+      s += `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="${SHADE[j]}"/>`;
+      if (v >= 0.07) s += T(x + bw / 2, y + bh / 2 + 11, (100 * v).toFixed(0) + "%", { size: 30, weight: 700, anchor: "middle", fill: INK[j] });
+      x += bw;
+    });
+    s += r ? T(w, y + bh / 2 + 13, JSD(r).toFixed(3), { size: 38, weight: 700, anchor: "end" }) : T(w, y + bh / 2 + 13, "target", { size: 30, fill: COL.sub, anchor: "end" });
+    if (i === 0) s += `<line x1="0" y1="${top + rowH - 2}" x2="${w}" y2="${top + rowH - 2}" stroke="${COL.soft}" stroke-width="3"/>`;
+  });
+  const lw = (x1 - x0) / 5;
+  F.dur_bin_range_s.forEach(([lo, hi], j) => {
+    const x = x0 + j * lw;
+    s += `<rect x="${x}" y="${legY}" width="34" height="34" fill="${SHADE[j]}"/>`;
+    s += T(x + 46, legY + 28, j === 4 ? `${lo.toFixed(0)} s +` : `${lo.toFixed(0)}–${hi.toFixed(0)} s`, { size: 30, fill: COL.sub });
+  });
+  document.getElementById("lengths").innerHTML = s + "</svg>";
+  const share = (r, js) => 100 * js.reduce((a, j) => a + mean(r, `dur_bin_share@10[click].list_${j}`), 0);
+  const edge = (j) => F.dur_bin_range_s[j][0].toFixed(0), upto = (j) => F.dur_bin_range_s[j][1].toFixed(0);
+  const ref = [0, 1, 2, 3, 4].map((j) => 100 * mean(naive, `dur_bin_share@10[click].ref_${j}`));
+  const d2q = ROWS[2].r, dj = (i) => pc(pct(ROWS[i].r, ROWS[i].base, "jsd_dur@10[click]"));
+  document.getElementById("lengths-text").innerHTML = [
+    `<b>Fixing duration moves popularity.</b> D2Q takes VR’s lists off long videos (${share(vr, [3, 4]).toFixed(0)}% → ${share(d2q, [3, 4]).toFixed(0)}% of slots ≥ ${edge(3)} s) into ${edge(1)}–${upto(2)} s (${share(d2q, [1, 2]).toFixed(0)}%), past the near-even clicked mix (${Math.min(...ref).toFixed(0)}–${Math.max(...ref).toFixed(0)}% per fifth; JSD ${dj(2)}). Its ARP falls by ${Math.abs(pct(d2q, vr, "arp@10")).toFixed(0)}%.`,
+    `<b>Fixing popularity moves duration only sometimes.</b> MACR piles into ${edge(2)}–${upto(2)} s (${share(naive, [2]).toFixed(0)}% → ${share(ROWS[0].r, [2]).toFixed(0)}%, JSD ${dj(0)}). IPS-feat shifts to longer videos (≥ ${edge(3)} s: ${share(naive, [3, 4]).toFixed(0)}% → ${share(ROWS[1].r, [3, 4]).toFixed(0)}%, JSD ${dj(1)}), likely because its propensity model uses duration. <b>The shift follows what a correction conditions on, not popularity alone.</b>`,
+  ].map((t) => `<p>${t}</p>`).join("");
+}
+</script>

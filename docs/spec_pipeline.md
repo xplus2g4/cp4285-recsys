@@ -93,7 +93,7 @@ src/cp4285_proj/
     accuracy.py        # gauc, ndcg
     popularity.py      # arp
     exposure.py        # gini
-    duration.py        # wasserstein_duration
+    duration.py        # wasserstein_duration, jsd_dur, dur_bin_share (duration quintiles)
     common.py          # shared vectorised helpers (top-k lists, recommendation frequencies, binary relevance)
 configs/
   data.toml            # preprocess parameters
@@ -478,10 +478,13 @@ Accuracy is `gauc` and `ndcg`. Each bias has one metric: popularity `arp`, expos
 | Id | Kind | Params | Definition |
 |---|---|---|---|
 | `gauc` | per_user → aggregated with candidate-count weights | label | AUC of `score` against `rel` within `C_u`. NaN if `C_u` has only one class. The aggregate is GAUC = Σ_u \|C_u\|·AUC_u / Σ_u \|C_u\| over non-NaN users. Labels with no binary relevance (`raw_watch_time`) are skipped. |
+| `xgauc` | per_user → aggregated with candidate-count weights | label | XAUC (Zhan et al. KDD '22) within `C_u`: the share of row pairs with different label values that `score` orders the same way; score ties count ½. NaN if all label values in `C_u` are equal. The aggregate is XGAUC = Σ_u \|C_u\|·XAUC_u / Σ_u \|C_u\| over non-NaN users. The panel uses it on `raw_watch_time`. |
 | `ndcg` | per_user | k, label | NDCG@k ranking `C_u` by score. The gain is the label value: 0/1, capped watch ratio, or `raw_watch_time` min-max scaled within the user. The ideal is taken over `C_u`. Lists are truncated at min(k, \|C_u\|). NaN if every gain is 0 or every gain is equal. |
 | `arp` | per_user | k | popularity: mean over i ∈ `L_u` of pop(i) |
 | `gini` | global | k | exposure: Gini coefficient of item recommendation frequency over all `n_items` pool items, zeros included |
 | `wasserstein_duration` | global | k, label | duration: `scipy.stats.wasserstein_distance` between the durations (seconds) of pooled `L_u` items and of relevant candidate rows |
+| `jsd_dur` | per_user | k, label | duration: User Popularity Deviation style (Abdollahpouri et al., UMAP '21), over 5 duration quintiles (items ranked by (`duration_ms`, item_idx); bin = rank · 5 // n_items): Jensen–Shannon divergence, base 2 (so in [0, 1]), between p = the share of the user's relevant candidate rows in each bin and q = the share of `L_u` in each bin. The target is the user's engagement on random exposure. NaN for users with no relevant candidate row. |
+| `dur_bin_share` | global | k, label | duration: `{list_j}`: share of all `L_u` slots (pooled) in duration quintile j; `{ref_j}`: share of all relevant candidate rows in quintile j. The pooled ingredients of `jsd_dur`, for plots. |
 
 Per-user values are averaged over non-NaN users unless the table says otherwise (as for `gauc`).
 
@@ -549,7 +552,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 9. `kr-evaluate <final_run> --split test` writes the test predictions and the panel output. Evaluating a non-final run on test raises an error. A second test evaluation warns and records `test_eval_count = 2`.
 10. Adding a `[[metric]]` entry for a newly registered function, or deleting an entry, then rerunning `kr-evaluate`, gives results under a new panel hash. No retraining and no rescoring happen, because the existing `pred/` files are reused.
 11. An unknown metric name, an unknown parameter, `k > K_max` or an unknown label in `panel.toml` fails before any metric is computed.
-12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini` and `wasserstein_duration`.
+12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `xgauc` (score ties, equal-label exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini`, `wasserstein_duration` and `jsd_dur`/`dur_bin_share` (including the no-positive exclusion).
 13. `kr-evaluate --sweep <id> --split test` writes the mean ± std over the 5 seeds and a 95% bootstrap CI for every panel instance.
 14. `kr-rescore <run_id> --k 200` rewrites `topk.parquet` with 200 columns, and a panel entry with `k = 200` then passes validation.
 

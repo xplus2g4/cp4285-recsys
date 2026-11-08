@@ -1,0 +1,46 @@
+<style>
+  .flow { display: grid; grid-template-columns: 1fr 40px 1fr 40px 1fr 40px 1fr; margin-bottom: 20px; }
+  .flow .box { background: #f6f7f9; border-radius: 6px; padding: 14px 18px; font-size: 27px; line-height: 1.28; }
+  .flow .box b { display: block; font-size: 32px; margin-bottom: 4px; }
+  .flow .box.test { background: #e6f2f0; }
+  .flow .arrow { align-self: center; text-align: center; font-size: 44px; color: var(--sub); }
+  table.meth { width: 100%; border-collapse: collapse; }
+  table.meth th { text-align: left; font-family: "IBM Plex Mono"; font-weight: 600; font-size: 25px; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); border-bottom: 3px solid var(--ink); padding: 0 18px 10px 0; }
+  table.meth td { border-bottom: 2px solid var(--soft); padding: 10px 18px 10px 0; vertical-align: top; }
+  table.meth td:first-child { font-family: Fraunces; font-weight: 800; font-size: 36px; white-space: nowrap; line-height: 1.1; }
+  table.meth td:first-child small { display: block; font-family: Inter; font-weight: 400; font-size: 26px; color: var(--sub); margin-top: 4px; }
+  table.meth tr.base td { color: var(--sub); }
+  table.meth .eq { margin-top: 4px; font-size: 25px; line-height: 1.4; }
+</style>
+
+<div>
+  <div class="sec-head"><h2>Methodology</h2></div>
+  <div class="flow" id="flow"></div>
+  <table class="meth">
+    <thead><tr><th>Method</th><th>How it corrects: training loss, ranking score</th></tr></thead>
+    <tbody>
+      <tr><td style="color:var(--pop)">MACR [3]<small>popularity</small></td><td>Adds item branch <span class="tex">\hat y_i</span> and user branch <span class="tex">\hat y_u</span>; ranking removes the item effect
+        <div class="eq"><span class="tex">\mathcal L=\mathrm{BCE}\big(f_{ui}\,\sigma(\hat y_i)\,\sigma(\hat y_u),\,y_{ui}\big)+\alpha\,\mathrm{BCE}(\hat y_i,y_{ui})+\beta\,\mathrm{BCE}(\hat y_u,y_{ui})</span><br><span class="tex">s_{ui}=(f_{ui}-c)\,\sigma(\hat y_i)\,\sigma(\hat y_u)</span></div></td></tr>
+      <tr><td style="color:var(--exp)">IPS-feat [4]<small>exposure</small></td><td>Weights each logged interaction by <span class="tex">1/\hat P_{ui}</span>; <span class="tex">\hat P_{ui}</span> = P(shown), from an FM over user and video features
+        <div class="eq"><span class="tex">\mathcal L=\textstyle\sum w_{ui}\,\mathrm{BCE}(f_{ui},y_{ui}),\ \ w_{ui}\propto\min\big(1/\hat P_{ui},\,\mathrm{clip}/\max\hat P\big),\quad s_{ui}=f_{ui}</span></div></td></tr>
+      <tr><td style="color:var(--dur)">D2Q [5]<small>duration</small></td><td>Trains on the watch-time quantile <span class="tex">\hat\Phi_{k(i)}</span> within the video’s length group (one of M); ranks by the watch time it implies
+        <div class="eq"><span class="tex">\mathcal L=\textstyle\sum\mathrm{BCE}\big(\sigma(f_{ui}),\,\hat\Phi_{k(i)}(w_{ui})\big),\quad s_{ui}=\hat\Phi^{-1}_{k(i)}\big(\sigma(f_{ui})\big)</span></div></td></tr>
+      <tr class="base"><td>Baselines</td><td>Naive MF on clicks (vs MACR, IPS-feat) · VR on raw watch time (vs D2Q)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+// ---- methodology: pipeline ----
+{
+  const k = (n) => num(n);
+  const boxes = [
+    ["Train", `Standard log, 8–21 Apr: ${(F.n_train_rows / 1e6).toFixed(2)}M exposures chosen by the platform’s policy`],
+    ["Model", `One 64-d MF with score <span class="tex">f_{ui}</span> plus one correction; one knob value = one sweep`],
+    ["Tune", `Random log, 30% of users (${k(F.users.calibration)}): 9-point lr × weight-decay grid`],
+    ["Test", `Random log, 70% of users (${k(F.users.test)}): best point, 5 seeds, scored once`],
+  ];
+  document.getElementById("flow").innerHTML = boxes.map(([b, t], i) =>
+    (i ? `<div class="arrow">→</div>` : "") + `<div class="box${i === 3 ? " test" : ""}"><b>${b}</b>${t}</div>`).join("");
+}
+</script>

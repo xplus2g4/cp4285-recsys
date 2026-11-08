@@ -1,0 +1,18 @@
+<div>
+  <h4>Takeaways</h4>
+  <ol id="takeaways"></ol>
+</div>
+
+<script>
+// ---- takeaways ----
+{
+  const c = (i, key) => cell(ROWS[i], COLS.find((x) => x.key === key));
+  const accMax = (j) => Math.max(...ROWS.map((row) => Math.abs(cell(row, COLS[j]).p)));
+  const biasMax = Math.max(...ROWS.flatMap((_, i) => ["pop", "exp", "dur"].map((b) => Math.abs(c(i, b).p))));
+  document.getElementById("takeaways").innerHTML = [
+    `<b>Targets move, one the wrong way.</b> MACR popularity ${pc(c(0, "pop").p)}, IPS-feat coverage ${pc(c(1, "exp").p)}, D2Q duration JSD ${pc(c(2, "dur").p)}.`,
+    `<b>Bias moves.</b> MACR coverage ${pc(c(0, "exp").p)} and duration ${pc(c(0, "dur").p)}, D2Q coverage ${pc(c(2, "exp").p)}; IPS-feat improves both others.`,
+    `<b>Accuracy is blind.</b> NDCG@10 moves by at most ${accMax(0).toFixed(1)}% and XGAUC by ${accMax(1).toFixed(1)}%, while bias metrics move by up to ${biasMax.toFixed(0)}%.`,
+  ].map((t) => `<li><span>${t}</span></li>`).join("");
+}
+</script>

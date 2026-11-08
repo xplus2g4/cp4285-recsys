@@ -1,0 +1,44 @@
+<section>
+  <div class="sec-head"><h2>Where each fix moves the bias</h2></div>
+  <div id="audit"></div>
+  <div class="note" id="audit-note"></div>
+</section>
+
+<script>
+// ---- audit matrix: one SVG, methods × biases, common % scale ----
+{
+  const W = 2878, labelW = 290, headH = 118, rowH = 106, footH = 44, H = headH + ROWS.length * rowH + footH;
+  const colW = (W - labelW) / COLS.length, pad = 22, txt = 140;
+  const cells = ROWS.map((row) => COLS.map((col) => cell(row, col)));
+  const max = Math.max(...cells.flat().map((c) => Math.abs(c.imp)));
+  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  COLS.forEach((col, j) => {
+    const x = labelW + j * colW, cx = x + colW / 2, half = colW / 2 - pad - txt;
+    const color = COL[col.key];
+    if (j) s += `<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="${COL.soft}" stroke-width="3"/>`;
+    s += T(x + pad, 58, col.title, { size: 64, weight: 800, fill: color, family: "Fraunces" });
+    s += T(x + pad, 102, col.sub, { size: 30, fill: COL.sub });
+    s += `<line x1="${cx}" y1="${headH - 10}" x2="${cx}" y2="${headH + ROWS.length * rowH}" stroke="${COL.ink}" stroke-width="3"/>`;
+    s += T(cx - 14, H - 14, "← worse", { size: 26, fill: COL.sub, anchor: "end", family: "IBM Plex Mono" });
+    s += T(cx + 14, H - 14, "better →", { size: 26, fill: COL.sub, family: "IBM Plex Mono" });
+    ROWS.forEach((row, i) => {
+      const c = cells[i][j], y = headH + i * rowH, bh = 50, by = y + 14;
+      const len = (Math.abs(c.imp) / max) * half, good = c.imp > 0;
+      const bx = good ? cx : cx - len;
+      if (row.target === col.key) s += `<rect x="${x + 10}" y="${y + 4}" width="${colW - 20}" height="${rowH - 8}" rx="10" fill="none" stroke="${color}" stroke-width="6"/>`;
+      s += `<rect x="${bx}" y="${by}" width="${Math.max(len, 3)}" height="${bh}" fill="${color}" opacity="${good ? 1 : 0.3}"/>`;
+      const tx = good ? cx + len + 14 : cx - len - 14, anchor = good ? "start" : "end";
+      s += T(tx, by + 40, signed(c.p, Math.abs(c.p) < 9.95 ? 1 : 0) + "%" + (c.sig ? "" : " ns"), { size: 44, weight: 700, anchor, fill: c.sig ? COL.ink : COL.sub });
+      s += T(good ? cx - 14 : cx + 14, by + bh + 32, `${col.raw(c.from)} → ${col.raw(c.to)}`, { size: 28, fill: COL.sub, anchor: good ? "end" : "start" });
+    });
+  });
+  ROWS.forEach((row, i) => {
+    const y = headH + i * rowH;
+    s += T(0, y + 54, row.name, { size: 58, weight: 800, family: "Fraunces" });
+    s += T(0, y + 92, row.set, { size: 30, fill: COL.sub });
+  });
+  document.getElementById("audit").innerHTML = s + "</svg>";
+  document.getElementById("audit-note").innerHTML =
+    `Solid = better (accuracy up or bias down); pale = worse; grey = baseline → method. XGAUC: share of each user’s video pairs that the model ranks in watch-time order, weighted by the user’s number of candidates. Duration: per user, Jensen–Shannon divergence between the length mix of the top-10 and of the videos the user clicked on random exposure, over five equal-count length bins; 0 = same mix, 1 = disjoint [6]. MACR and IPS-feat vs Naive MF (clicks); D2Q vs VR (raw watch time, a label that itself favours long videos). One mid-grid setting per method. All changes significant (paired 95% bootstrap over test users) unless marked ns.`;
+}
+</script>

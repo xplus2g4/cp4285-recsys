@@ -10,8 +10,8 @@ import pytest
 from conftest import make_bundle
 
 from cp4285_proj.evaluation.panel import parse_panel, run_panel
-from cp4285_proj.metrics.accuracy import gauc, gauc_value, ndcg
-from cp4285_proj.metrics.duration import wasserstein_duration
+from cp4285_proj.metrics.accuracy import gauc, gauc_value, ndcg, xgauc
+from cp4285_proj.metrics.duration import dur_bin_share, jsd_dur, wasserstein_duration
 from cp4285_proj.metrics.exposure import gini, gini_coefficient
 
 L2, L3, L4 = math.log2(2), math.log2(3), math.log2(4)
@@ -47,6 +47,28 @@ def test_gauc_aggregate_is_candidate_count_weighted():
     assert res.scalars["gauc[click]"] == pytest.approx(expected)
     assert res.n_excluded["gauc[click]"] == 1
     assert gauc_value(b.cand_user_pos, b.cand_score, b.cand_labels["click"] == 1, 3) == pytest.approx(expected)
+
+
+# --------------------------------------------------------------------------- xgauc
+
+
+def test_xgauc_pairs_ties_and_weighting():
+    # u0: watch times 1000 < 2000 < 3000; scores order (3000, 1000) and (2000, 1000) right, tie (3000, 2000) → 2.5 / 3
+    # u1: equal watch times → no ordered pair, excluded
+    # u2: 2000 > 1000 but scored lower → 0
+    b = make_bundle(
+        cand_user_pos=[0, 0, 0, 1, 1, 2, 2],
+        cand_item=[0, 1, 2, 0, 1, 0, 1],
+        cand_score=[0.1, 0.9, 0.9, 0.3, 0.6, 0.9, 0.1],
+        topk=np.zeros((3, 2), dtype=int),
+        labels={"raw_watch_time": [1000, 3000, 2000, 5, 5, 1000, 2000]},
+    )
+    x = xgauc(b, label="raw_watch_time")
+    assert x[0] == pytest.approx(2.5 / 3)
+    assert np.isnan(x[1])
+    assert x[2] == 0.0
+    res = run_panel(parse_panel({"metric": [{"name": "xgauc", "labels": ["raw_watch_time"]}]}), b)
+    assert res.scalars["xgauc[raw_watch_time]"] == pytest.approx((3 * 2.5 / 3 + 2 * 0.0) / 5)
 
 
 # --------------------------------------------------------------------------- ndcg
@@ -120,6 +142,26 @@ def test_wasserstein_pools_lists_against_relevant_rows():
 def test_wasserstein_undefined_without_relevant_rows():
     b = make_bundle([0, 1], [0, 1], [0.0, 0.0], topk=[[0], [1]], labels={"click": [0, 0]})
     assert math.isnan(wasserstein_duration(b, k=1, label="click")["value"])
+
+
+def test_jsd_dur_per_user_and_pooled_bin_shares():
+    # 10 items, equal durations: ties rank by item_idx, so dur bin = item // 2. u0: list bins {0, 1}, relevant rows
+    # items 0, 1 (both bin 0); u1: list bins {4, 4}, relevant item 9 (bin 4) → identical distributions; u2: no relevant row
+    b = make_bundle(
+        cand_user_pos=[0, 0, 1, 2],
+        cand_item=[0, 1, 9, 4],
+        cand_score=[0.0] * 4,
+        topk=[[0, 2], [8, 9], [4, 5]],
+        labels={"click": [1, 1, 1, 0]},
+    )
+    v = jsd_dur(b, k=2, label="click")
+    # p = [1, 0], q = [.5, .5], m = [.75, .25]: (log2(4/3) + .5·log2(2/3) + .5·log2(2)) / 2
+    assert v[0] == pytest.approx((math.log2(4 / 3) + 0.5 * math.log2(2 / 3) + 0.5) / 2)
+    assert v[1] == pytest.approx(0.0)
+    assert np.isnan(v[2])
+    s = dur_bin_share(b, k=2, label="click")
+    assert [s[f"list_{j}"] for j in range(5)] == pytest.approx([1 / 6, 1 / 6, 2 / 6, 0, 2 / 6])
+    assert [s[f"ref_{j}"] for j in range(5)] == pytest.approx([2 / 3, 0, 0, 0, 1 / 3])
 
 
 # --------------------------------------------------------------------------- resampling
