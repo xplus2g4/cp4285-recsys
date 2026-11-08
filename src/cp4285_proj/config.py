@@ -10,7 +10,7 @@ import dataclasses
 import tomllib
 import types
 import typing
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,22 +18,10 @@ from typing import Any, Literal
 
 
 @dataclass(frozen=True)
-class ClickbaitConfig:
-    min_support: int = 20
-    click_rate_q: float = 0.75
-    watch_ratio_q: float = 0.25
-    hate_rate_q: float = 0.90
-
-
-@dataclass(frozen=True)
 class DataConfig:
     split_seed: int = 4285
     calibration_frac: float = 0.3
     watch_ratio_cap: float = 1.0
-    n_bins: int = 5
-    head_frac: float = 0.2
-    min_history: int = 5
-    clickbait: ClickbaitConfig = field(default_factory=ClickbaitConfig)
     raw_dir: str = "data/raw/KuaiRand-Pure/data"
     processed_dir: str = "data/processed"
 

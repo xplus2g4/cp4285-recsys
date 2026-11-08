@@ -1,4 +1,4 @@
-# MACR (Wei et al., KDD '21) on the MF backbone (spec §13.5).
+# MACR (Wei et al., KDD '21) on the MF backbone (spec §13.1).
 # Frontier: sweep `c`.
 [model]
 embedding_dim = 64

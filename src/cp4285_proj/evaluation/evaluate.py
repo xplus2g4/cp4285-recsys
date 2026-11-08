@@ -60,22 +60,22 @@ def evaluate_run(run_id: str, split: Split, panel: Panel, pipe: PipelineConfig, 
         print(f"[{run_id[:8]}] test_eval_count = {count}")
     else:
         part_df = schema.load_calibration(directory)
-    items, users = schema.load_items(directory), schema.load_users(directory)
-    seen = schema.load_seen_mask(directory, users.height)
+    items = schema.load_items(directory)
 
     if has_predictions(run_dir, split):
         print(f"[{run_id[:8]}] reusing saved predictions in {pred_dir(run_dir, split)}")
     elif split == "test":
         model = load_recommender(run_dir / "best.pt", torch.device(rcfg["pipeline"]["device"]))
         k = topk_width(run_dir, "calibration")
-        write_part_predictions(model, run_dir, "test", part_df, k, seen if rcfg["pipeline"]["mask_train_seen"] else None)
+        seen = schema.load_seen_mask(directory, schema.load_users(directory).height) if rcfg["pipeline"]["mask_train_seen"] else None
+        write_part_predictions(model, run_dir, "test", part_df, k, seen)
         print(f"[{run_id[:8]}] wrote test predictions (K_max={k}) to {pred_dir(run_dir, 'test')}")
     else:
         raise FileNotFoundError(f"calibration predictions missing for run {run_id}")
     check_k(panel, topk_width(run_dir, split), run_id)
 
     cands, topk = load_predictions(run_dir, split)
-    bundle = build_bundle(split, cands, part_df, topk, items, users, seen)
+    bundle = build_bundle(split, cands, part_df, topk, items)
     result = run_panel(panel, bundle)
     names, samples = bootstrap_samples(panel, bundle, result, progress=progress)
     lo, hi = percentile_ci(samples, panel.bootstrap.ci)

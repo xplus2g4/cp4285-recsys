@@ -20,7 +20,7 @@ Section references (§N) point to `docs/draft_methodology.md`.
 - the GPU training loop with early stopping on calibration;
 - `sweep` (tuning, then seed reruns);
 - saved predictions;
-- the metric registry and the whole §6 panel except the IPS-only diagnostics;
+- the metric registry and the §6 panel (accuracy plus one metric per bias, §7.3) except the IPS-only diagnostics;
 - the user-level bootstrap and the seed mean ± std;
 - MLflow tracking;
 - a soft guard on the test split.
@@ -73,7 +73,10 @@ src/cp4285_proj/
   recommenders/
     base.py            # Recommender protocol, TorchRecommender, Backbone
     registry.py        # @register_recommender, lookup by name
-    naive_mf.py        # MFBackbone, NaiveMF
+    naive_mf.py        # MFBackbone, NaiveMF (§5.3)
+    macr.py            # MACR (§13.1)
+    d2q.py             # D2Q (§13.2)
+    ips_feature.py     # IPS with a feature-based propensity (§13.3)
   training/
     loop.py            # GPU-resident epoch loop, early stopping, seeding
     sweep.py           # budgeted search → final seed reruns
@@ -88,17 +91,15 @@ src/cp4285_proj/
   metrics/
     registry.py        # @register_metric, MetricKind
     accuracy.py        # gauc, ndcg
-    popularity.py      # arp, gini, aplt, rsp, reo (pop groups)
-    duration.py        # list_duration, wasserstein_duration, jsd_dur, dur_bin_share, rsp/reo (dur groups)
-    coverage.py        # coverage, exposure_entropy
-    groups.py          # ndcg_by_group, calibration_kl
-    clickbait.py       # clickbait_share
-    common.py          # shared vectorised helpers (top-k frequencies, bin counts, weighted median)
+    popularity.py      # arp
+    exposure.py        # gini
+    duration.py        # wasserstein_duration, jsd_dur, dur_bin_share (duration quintiles)
+    common.py          # shared vectorised helpers (top-k lists, recommendation frequencies, binary relevance)
 configs/
   data.toml            # preprocess parameters
   pipeline.toml        # pipeline-fixed settings (tuning budget, seeds, K_max, selection rule)
   panel.toml           # the editable metric panel
-  recommenders/mf.toml # MF hyperparameters + search space
+  recommenders/*.toml  # per-recommender hyperparameters + search space
   experiments/*.toml   # recommender × training label × split
 data/raw/KuaiRand-Pure/data/   # downloaded (MD5 0820331067a3784d9691136f772b35a7), git-ignored
 data/processed/<split>/        # preprocess output, git-ignored
@@ -132,7 +133,7 @@ If any file is missing or has the wrong row count, preprocessing fails before it
    - Both raw IDs are kept as columns.
 3. **Labels** (`data/labels.py`). These are computed on every log row:
 
-   | Label | Definition | Kind | Binary relevance used by GAUC / REO / Wasserstein |
+   | Label | Definition | Kind | Binary relevance used by GAUC / Wasserstein |
    |---|---|---|---|
    | `click` | `is_click` | binary | `== 1` |
    | `long_view` | `long_view` | binary | `== 1` |
@@ -146,27 +147,18 @@ If any file is missing or has the wrong row count, preprocessing fails before it
    - `pop_exposure`: number of train rows for the item.
    - `pop_play`: number of train rows with `play_time_ms > 0`.
    - `duration_ms`: from `video_duration`.
-   - `pop_bin` / `dur_bin`: 5 equal-size quantile bins over the pool, ranked by `(pop_exposure, video_id)` and by `(duration_ms, video_id)`. Breaking ties by `video_id` keeps the bins equal in size even though popularity has many tied counts. These bins are the §3 grid and are reused by RSP/REO and calibration KL.
-   - `is_head`: one of the top `ceil(0.2 · 7,344)` items by the same popularity ranking. The head holds about 75% of train exposures. Every other item, cold items included, is long tail.
    - `is_cold`: `pop_exposure == 0`.
-   - `is_clickbait`: computed from **calibration** rows only, so test labels never define item attributes. An item is clickbait if it has at least `clickbait.min_support = 20` calibration exposures, its click rate is ≥ the 75th percentile, **and** either its mean `watch_ratio` is ≤ the 25th percentile or its `is_hate` rate is ≥ the 90th percentile **and > 0**. Percentiles are taken over the supported items (`np.quantile`, linear interpolation). The thresholds live in `data.toml` and are recorded in the manifest.
-     - *Implementation note (`> 0`).* `is_hate` is rare (0.096% of calibration rows; 316 of 7,077 supported items have any), so its 90th percentile is 0.0 and "rate ≥ p90" alone holds for every item. Read literally, the hate arm would make every high-click item clickbait (1,772 items). With the `> 0` guard there are 163 (92 from the watch-ratio arm). The manifest records `hate_rate_requires_positive = true`.
-7. **User metadata.** History is the user's train rows. A user with fewer than `min_history = 5` distinct train items gets the group `no_history` in every history-based grouping (`mainstream`, `dur_pref`; `activity` comes from the user table and has no `no_history` group). This covers, for example, the random-log users who have no train rows at all: 1,075 in the raw logs (checked at runtime), 1,113 after the item drop, because 38 users had train rows only on dropped items.
-   - `activity_group`: `user_active_degree` collapsed to `high` (`high_active`), `full` (`full_active`), `middle` (`middle_active`) and `other` (everything else: low, single_low, 2_14_day_new, day_new, 30day_retention, UNKNOWN; 1,035 users).
-   - `mainstream_score`: Spearman correlation between the user's per-item train exposure counts (a vector over all pool items, zeros included) and the global `pop_exposure` vector. Kowald et al. take this measure from Bauer & Schedl and use Kendall τ; Spearman is chosen here. Ties take average ranks, as in `scipy.stats.spearmanr`. `mainstream_group`: tertiles `low` / `mid` / `high` over users with enough history.
-   - `dur_pref_ms`: median `duration_ms` over the user's train rows. `dur_pref_group`: tertiles `short` / `mid` / `long`.
-   - Tertiles are equal-size and rank-based: users are ranked by `(value, user_idx)` and split into thirds, the same way as the item bins.
-   - `hist_pop_dist[5]` / `hist_dur_dist[5]`: share of the user's train rows in each `pop_bin` / `dur_bin`, for calibration KL.
+7. **User metadata.** Computed on the train split only.
+   - `n_train_rows` / `n_train_items`: the user's train rows and distinct train items. Users with no train rows are still scored (§5.3). Among the random-log users, 1,075 have no train rows in the raw logs (checked at runtime) and 1,113 after the item drop, because 38 users had train rows only on dropped items.
    - `role`: `calibration` | `test` | `train_only`. In this release every one of the 27,285 users is in the random log, so `train_only` is empty.
-8. **Categorical side features** (static metadata, no log rows; added for the feature propensity of §13.6 and a later DeepFM backbone). `user_features.parquet` and `item_features.parquet` hold one Int32 code per field, where 0 = missing and 1..K are the distinct raw values sorted as strings.
+8. **Categorical side features** (static metadata, no log rows; used by the feature propensity of §13.3 and a later DeepFM backbone). `user_features.parquet` and `item_features.parquet` hold one Int32 code per field, where 0 = missing and 1..K are the distinct raw values sorted as strings.
    - User fields (`schema.USER_FEATURES`): `user_active_degree`, `is_live_streamer`, `is_video_author`, the four `*_range` columns (follow, fans, friend, register days) and `onehot_feat0`–`onehot_feat17`. Raw counts are left out because their `*_range` bins are kept, and `is_lowactive_period` is constant in this release.
    - Item fields (`schema.ITEM_FEATURES`): `video_type`, `upload_type`, `upload_dt`, `music_type`, `tag`, `orientation` (portrait / landscape / square, from `server_height` against `server_width`) and `duration_decile`. The deciles are 10 equal-size bins of the pool ranked by `(duration_ms, video_id)`, i.e. catalogue bins that use no log rows. Left out: `author_id` and `music_id`, which are near-identifiers, and `visible_status`, which is constant.
-   - Adding these two files left the five existing outputs byte-identical (same `output_files` hashes); only `manifest.json` changed.
 9. **Manifest and sanity checks** (`manifest.json`):
    - hashes of the input files;
    - `split_seed` and the config snapshot;
    - row counts per part;
-   - user counts per part and per group;
+   - user counts per part;
    - drop counts;
    - cold-item and cold-user counts per part;
    - per-label positive rates per part;
@@ -200,11 +192,7 @@ video_id: int32
 duration_ms: int64
 pop_exposure: int32
 pop_play: int32
-pop_bin: int8            # 0..4, 4 = most popular
-dur_bin: int8            # 0..4, 4 = longest
-is_head: bool
 is_cold: bool
-is_clickbait: bool
 
 # users.parquet (one row per user, sorted by user_idx)
 user_idx: int32
@@ -212,13 +200,6 @@ user_id: int32
 role: str                # calibration | test | train_only
 n_train_rows: int32
 n_train_items: int32
-activity_group: str
-mainstream_score: float32   # NaN if no_history
-mainstream_group: str
-dur_pref_ms: float32        # NaN if no_history
-dur_pref_group: str
-hist_pop_dist: list[float32]  # length 5; null if no_history
-hist_dur_dist: list[float32]  # length 5; null if no_history
 
 # user_features.parquet / item_features.parquet (one row per user / pool item, sorted by user_idx / item_idx)
 user_idx | item_idx: int32
@@ -256,7 +237,7 @@ class TrainData:
     item: torch.Tensor          # int64 [N]
     target: torch.Tensor        # float32 [N]; the training label (soft target for watch_ratio)
     extras: dict[str, torch.Tensor]  # other label columns, time, tab: for future weighting hooks
-    items: "ItemTensors"        # pop_exposure, pop_bin, dur_bin, duration_ms on device, indexed by item_idx
+    items: "ItemTensors"        # pop_exposure, duration_ms on device, indexed by item_idx
     user_features: torch.Tensor # int64 [n_users, F_u] categorical codes (§4.2 step 8)
     item_features: torch.Tensor # int64 [n_items, F_i]
     n_users: int
@@ -308,13 +289,13 @@ class TorchRecommender(Recommender):
 
     # hooks (defaults are the naive behaviour)
     def batch_loss(self, batch: "Batch") -> torch.Tensor:             # default: loss(backbone(u, i), target, sample_weight(batch))
-        ...                                                            # overridden when the training score or target differs (PDA)
-    def sample_weight(self, batch: "Batch") -> torch.Tensor | None:   # default None → unweighted (IPS/SNIPS/DR later)
+        ...                                                            # overridden when the training score or target differs (MACR, D2Q)
+    def sample_weight(self, batch: "Batch") -> torch.Tensor | None:   # default None → unweighted (IPS overrides, §13.3)
         return None
     def loss(self, logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor | None) -> torch.Tensor:
         ...                                                            # default: BCEWithLogits, mean (Σ w·ℓ / Σ w if weight)
     def adjust_scores(self, logits: torch.Tensor, user: torch.Tensor, item: torch.Tensor | None) -> torch.Tensor:
-        return logits                                                  # inference-time correction (PDA, MACR later)
+        return logits                                                  # inference-time correction (MACR, D2Q)
 
     # fit → training.loop.run(self, train, ctx); score/recommend → backbone + adjust_scores + masking
 ```
@@ -435,7 +416,7 @@ k = [10, 20]
 ```
 
 Rules:
-- **Expansion.** Each list-valued parameter, plus `labels = "all"`, is expanded into a cross product. Each instance gets a canonical id, e.g. `ndcg@10[click]`, `rsp_pop@20`, `ndcg_by_group@10[click|mainstream]`.
+- **Expansion.** Each list-valued parameter, plus `labels = "all"`, is expanded into a cross product. Each instance gets a canonical id, e.g. `ndcg@10[click]`, `gini@20`, `wasserstein_duration@10[click]`. Values of `Literal`-typed parameters follow the label, e.g. `<name>@10[click|a]`.
 - **Validation before computing anything.** An unknown metric name, a missing or unknown parameter, `k > K_max`, or an unknown label fails before any metric is computed. `K_max` here is the width of the run's saved `topk.parquet`, so it grows after `kr-rescore`. A label without a binary relevance given explicitly to a metric that needs one also fails; under `labels = "all"` such labels are skipped.
 - **Panel hash.** The SHA-256 of the expanded, canonicalised panel is stored with every result. Results are written to `outputs/runs/<run_id>/eval/<split>/<panel_hash>/`. The canonical form is the JSON (sorted keys) of `eval_labels`, the `bootstrap` settings and the instances sorted by id. Reordering `[[metric]]` tables therefore keeps the hash; changing entries or bootstrap settings changes it.
 
@@ -443,20 +424,19 @@ Rules:
 
 ```python
 # metrics/registry.py
-MetricKind = Literal["per_user", "global", "per_group"]
+MetricKind = Literal["per_user", "global"]
 
 def register_metric(name: str, *, kind: MetricKind, params: dict[str, type], needs_label: bool,
                     needs_relevance: bool = False, weight: Literal["uniform", "candidates"] = "uniform") -> Callable: ...
 # params: every parameter except `label` (e.g. {"k": int}); a Literal[...] type lists allowed values.
 # needs_label adds the `labels` parameter. needs_relevance: the label must have a binary relevance, so
-#   labels = "all" can skip labels without one at validation time (gauc, reo_*, list_duration, wasserstein_duration).
+#   labels = "all" can skip labels without one at validation time (gauc, wasserstein_duration).
 # weight: how a per_user metric is aggregated; "candidates" weights users by |C_u| (gauc).
 # These two keywords were added because expansion/validation and GAUC's aggregation need them and §7.3 implies them.
 
 # Return types by kind:
 #   per_user  → np.ndarray float64 [U] aligned with bundle.users; NaN = user excluded for this metric
-#   global    → dict[str, float]           (one or more named values, e.g. {"value": g} or {"mean": …, "delta_mean": …})
-#   per_group → dict[str, float]           group name → value, plus "gap" (max − min over groups other than no_history)
+#   global    → dict[str, float]           (one or more named values, e.g. {"value": g})
 
 @dataclass(frozen=True)
 class EvalBundle:
@@ -468,10 +448,7 @@ class EvalBundle:
     cand_labels: dict[str, np.ndarray]    # label name → [R] values
     labels: dict[str, "LabelSpec"]        # kind, binary relevance fn
     topk: np.ndarray                  # [U, K_max] item_idx
-    seen: "CSRMask"                   # per user: train items (for "un-interacted" in RSP)
-    items: "ItemMeta"                 # numpy arrays by item_idx: duration_ms, pop_exposure, pop_bin, dur_bin, is_head, is_clickbait
-    user_groups: dict[str, np.ndarray]    # "activity" | "mainstream" | "dur_pref" → [U] group labels
-    hist_dist: dict[str, np.ndarray]      # "pop" | "dur" → [U, 5]; NaN rows for no_history
+    items: "ItemMeta"                 # numpy arrays by item_idx: duration_ms, pop_exposure
     n_items: int
 
     def resample(self, positions: np.ndarray) -> "EvalBundle":
@@ -486,7 +463,7 @@ class EvalBundle:
 def metric(b: EvalBundle, *, k: int | None = None, label: str | None = None, **params) -> np.ndarray | dict[str, float]: ...
 ```
 
-Per-user metrics report `n_excluded` next to their value. Training diagnostics, such as the future IPS maximum weight and ESS, are **not** panel metrics. They are logged by the training loop.
+Per-user metrics report `n_excluded` next to their value. Training diagnostics, such as the IPS maximum weight and ESS (§13.3), are **not** panel metrics. They are logged by the training loop.
 
 ### 7.3 Iteration-1 panel
 
@@ -496,36 +473,29 @@ Notation:
 - `rel`: the label's binary relevance.
 - `pop(i)` = `pop_exposure`.
 
+Accuracy is `gauc` and `ndcg`. Each bias has one metric: popularity `arp`, exposure `gini`, duration `wasserstein_duration`.
+
 | Id | Kind | Params | Definition |
 |---|---|---|---|
 | `gauc` | per_user → aggregated with candidate-count weights | label | AUC of `score` against `rel` within `C_u`. NaN if `C_u` has only one class. The aggregate is GAUC = Σ_u \|C_u\|·AUC_u / Σ_u \|C_u\| over non-NaN users. Labels with no binary relevance (`raw_watch_time`) are skipped. |
 | `xgauc` | per_user → aggregated with candidate-count weights | label | XAUC (Zhan et al. KDD '22) within `C_u`: the share of row pairs with different label values that `score` orders the same way; score ties count ½. NaN if all label values in `C_u` are equal. The aggregate is XGAUC = Σ_u \|C_u\|·XAUC_u / Σ_u \|C_u\| over non-NaN users. The panel uses it on `raw_watch_time`. |
 | `ndcg` | per_user | k, label | NDCG@k ranking `C_u` by score. The gain is the label value: 0/1, capped watch ratio, or `raw_watch_time` min-max scaled within the user. The ideal is taken over `C_u`. Lists are truncated at min(k, \|C_u\|). NaN if every gain is 0 or every gain is equal. |
-| `arp` | per_user | k | mean over i ∈ `L_u` of pop(i) |
-| `aplt` | per_user | k | share of `L_u` with `¬is_head` |
-| `gini` | global | k | Gini coefficient of item recommendation frequency over all `n_items` pool items, zeros included |
-| `coverage` | global | k | \|∪_u L_u\| / n_items |
-| `exposure_entropy` | global | k | Shannon entropy of item recommendation frequency / log(n_items) |
-| `rsp_pop`, `rsp_dur` | global | k | Ranking-based statistical parity (Zhu, Wang & Caverlee, **SIGIR '20**; the draft's "Zhu et al. WSDM '21" is wrong, see §11). For each bin a: P_a = Σ_u \|L_u ∩ G_a\| / Σ_u \|G_a \ seen_u\|. RSP = std_a(P_a) / mean_a(P_a), population std. The groups G_a are the 5 `pop_bin` or `dur_bin` groups. |
-| `reo_pop`, `reo_dur` | global | k, label | Ranking-based equal opportunity: the same as RSP with P_a = Σ_u \|L_u ∩ G_a ∩ Pos_u\| / Σ_u \|G_a ∩ Pos_u\|, where Pos_u = distinct items in `C_u` with `rel`. NaN if some bin has no positives. |
-| `list_duration` | global | k, label | `{mean, median}` of `duration_ms` over all items in all `L_u` (pooled), `{ref_mean, ref_median}` over relevant candidate rows, and `{delta_mean, delta_median}` |
-| `wasserstein_duration` | global | k, label | `scipy.stats.wasserstein_distance` between the durations (seconds) of pooled `L_u` items and of relevant candidate rows |
-| `jsd_dur` | per_user | k, label | User Popularity Deviation style (Abdollahpouri et al., UMAP '21), over the 5 `dur_bin` groups: Jensen–Shannon divergence, base 2 (so in [0, 1]), between p = the share of the user's relevant candidate rows in each bin and q = the share of `L_u` in each bin. The target is the user's engagement on random exposure, not the policy-shaped history `calibration_kl_dur` uses. NaN for users with no relevant candidate row. |
-| `dur_bin_share` | global | k, label | `{list_j}`: share of all `L_u` slots (pooled) in `dur_bin` j; `{ref_j}`: share of all relevant candidate rows in bin j. The pooled ingredients of `jsd_dur`, for plots. |
-| `ndcg_by_group` | per_group | k, label, grouping ∈ {activity, mainstream, dur_pref} | mean `ndcg` per group, plus `gap` |
-| `calibration_kl_pop`, `calibration_kl_dur` | per_user | k | Steck's C_KL = KL(p ‖ q̃), with p = `hist_dist`, q = the share of `L_u` in each bin, q̃ = (1−α)q + αp, α = 0.01. NaN for `no_history` users. |
-| `clickbait_share` | per_user | k | share of `L_u` with `is_clickbait` |
+| `arp` | per_user | k | popularity: mean over i ∈ `L_u` of pop(i) |
+| `gini` | global | k | exposure: Gini coefficient of item recommendation frequency over all `n_items` pool items, zeros included |
+| `wasserstein_duration` | global | k, label | duration: `scipy.stats.wasserstein_distance` between the durations (seconds) of pooled `L_u` items and of relevant candidate rows |
+| `jsd_dur` | per_user | k, label | duration: User Popularity Deviation style (Abdollahpouri et al., UMAP '21), over 5 duration quintiles (items ranked by (`duration_ms`, item_idx); bin = rank · 5 // n_items): Jensen–Shannon divergence, base 2 (so in [0, 1]), between p = the share of the user's relevant candidate rows in each bin and q = the share of `L_u` in each bin. The target is the user's engagement on random exposure. NaN for users with no relevant candidate row. |
+| `dur_bin_share` | global | k, label | duration: `{list_j}`: share of all `L_u` slots (pooled) in duration quintile j; `{ref_j}`: share of all relevant candidate rows in quintile j. The pooled ingredients of `jsd_dur`, for plots. |
 
-Per-user values are averaged over non-NaN users unless the table says otherwise (as for `gauc`). Group breakdowns of other per-user metrics are added as new `per_group` metrics, the same way as `ndcg_by_group`.
+Per-user values are averaged over non-NaN users unless the table says otherwise (as for `gauc`).
 
 ### 7.4 Statistics
 
 - **Per run** (`kr-evaluate <run_id> --split calibration|test`), output to `eval/<split>/<panel_hash>/`:
   - `per_user.parquet`: `user_idx`, `n_candidates`, then one column per per-user metric instance;
   - `summary.json`: point estimates and exclusion counts;
-  - `bootstrap.json`: a 95% percentile CI from 1,000 user resamples, with a fixed seed. Per-user metrics resample the saved per-user vectors. Global and per-group metrics are recomputed on `bundle.resample(positions)`. The raw draws are kept in `bootstrap_samples.npy` (`[B, S]`, columns named in `bootstrap.json`).
-  - Scalar names: a per-user or single-valued global instance is named by its id; a multi-valued global instance becomes `id.key` (e.g. `list_duration@10[click].delta_mean`); a per-group instance becomes `id.group` and `id.gap`.
-  - *Caveat.* Resampling users with replacement leaves about 63% distinct users, so set-based global metrics (`coverage`, `gini`, `exposure_entropy`) are biased in the resamples, and their percentile CI can exclude the point estimate (seen for `coverage`). Read those CIs as variability, not as coverage intervals.
+  - `bootstrap.json`: a 95% percentile CI from 1,000 user resamples, with a fixed seed. Per-user metrics resample the saved per-user vectors. Global metrics are recomputed on `bundle.resample(positions)`. The raw draws are kept in `bootstrap_samples.npy` (`[B, S]`, columns named in `bootstrap.json`).
+  - Scalar names: a per-user or single-valued global instance is named by its id; a multi-valued global instance becomes `id.key`.
+  - *Caveat.* Resampling users with replacement leaves about 63% distinct users, so set-based global metrics such as `gini` are biased in the resamples, and their percentile CI can exclude the point estimate. Read those CIs as variability, not as coverage intervals.
 - **Per sweep** (`kr-evaluate --sweep <sweep_id> --split test`): evaluates every `final` run, then writes `aggregate.json` with the mean ± std (ddof = 1) over seeds of every point estimate. The aggregate is logged to the sweep's parent MLflow run (`stage=sweep`). The CI in `aggregate.json` is the percentile CI of the seed-mean: all runs share the same users and bootstrap seed, so resample b uses the same positions in every run, and the CI is taken over the per-resample mean across runs.
 - **Extension point:** paired per-user tests against the naive baseline, with Holm correction across the panel. The per-user Parquet files already hold the input those tests need.
 
@@ -538,14 +508,6 @@ The precedence chain is: dataclass defaults < TOML < CLI `--section.field value`
 split_seed = 4285
 calibration_frac = 0.3
 watch_ratio_cap = 1.0
-n_bins = 5
-head_frac = 0.2
-min_history = 5
-[clickbait]
-min_support = 20
-click_rate_q = 0.75
-watch_ratio_q = 0.25
-hate_rate_q = 0.90
 
 # configs/pipeline.toml (pipeline-owned; identical across methods)
 tuning_budget = 9
@@ -583,14 +545,14 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
    - `train.parquet` has 1,141,112 − 24,076 rows.
 3. Running `kr-preprocess` twice gives the same output hashes in `manifest.json`.
 4. The manifest contains every count and check in §4.2 step 9.
-5. Popularity, bins, head, user groups and history distributions depend only on train rows: changing any calibration or test label leaves `items.parquet`, except `is_clickbait`, and `users.parquet` unchanged. `is_clickbait` depends on calibration rows only: changing test labels leaves it unchanged.
+5. Item popularity and user train counts depend only on train rows: changing any calibration or test label leaves `items.parquet` and `users.parquet` unchanged.
 6. `kr-train configs/experiments/mf_click.toml` trains Naive MF on the GPU and writes everything in §6 for calibration. The calibration GAUC at the best epoch is above 0.5. With `deterministic = true`, two runs with the same seed give the same `best_selection_score`.
 7. `kr-train` with a training label that the recommender does not support (e.g. `click` for `d2q`) fails at config load with an error naming the unsupported label.
 8. `kr-sweep` runs at most `tuning_budget` tuning runs and then 5 final runs, all visible in MLflow with the tags in §5.5.
 9. `kr-evaluate <final_run> --split test` writes the test predictions and the panel output. Evaluating a non-final run on test raises an error. A second test evaluation warns and records `test_eval_count = 2`.
 10. Adding a `[[metric]]` entry for a newly registered function, or deleting an entry, then rerunning `kr-evaluate`, gives results under a new panel hash. No retraining and no rescoring happen, because the existing `pred/` files are reused.
 11. An unknown metric name, an unknown parameter, `k > K_max` or an unknown label in `panel.toml` fails before any metric is computed.
-12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `xgauc` (score ties, equal-label exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini`, `rsp`/`reo`, `calibration_kl` (including smoothing), `wasserstein_duration` and `jsd_dur`/`dur_bin_share` (including the no-positive exclusion).
+12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `xgauc` (score ties, equal-label exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini`, `wasserstein_duration` and `jsd_dur`/`dur_bin_share` (including the no-positive exclusion).
 13. `kr-evaluate --sweep <id> --split test` writes the mean ± std over the 5 seeds and a 95% bootstrap CI for every panel instance.
 14. `kr-rescore <run_id> --k 200` rewrites `topk.parquet` with 200 columns, and a panel entry with `k = 200` then passes validation.
 
@@ -599,15 +561,12 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 - **Embedding size is chosen by each recommender (§5).** The draft asks for "the same embedding size and tuning budget". Only the tuning budget is held fixed. Fix the paper text, or set the same `embedding_dim` in every recommender config.
 - **No sensitivity run on all standard data (§2).** Only `guarded` is built. `kr-preprocess` takes the split name as a parameter so that `full` can be added later.
 - **239 items dropped.** These items have no duration at all. The random log is therefore uniform over 7,344 items, not 7,583. List this in §10 threats.
-- **`user_active_degree` has 9 levels, not 4** (the 4 levels are stated in `docs/literature/gao2022kuairand.md`). Collapsed as in §4.2 step 7.
-- **PopRSP/PopREO citation.** The draft cites Zhu et al. WSDM '21, which defines PRU/PRI. RSP/REO come from Zhu, Wang & Caverlee, SIGIR '20 (see `docs/literature/zhu2021popopp.md`).
-- **Mainstreaminess** uses Spearman; the source (Bauer & Schedl, via Kowald et al.) uses Kendall τ.
+- **`user_active_degree` has 9 levels, not 4** (the 4 levels are stated in `docs/literature/gao2022kuairand.md`). It enters only as a categorical side feature (§4.2 step 8), one code per level.
 - **Calibration split usage.** Calibration is used for early stopping as well as hyperparameter selection, the same way for every method.
 - **Found during implementation** (not in the draft):
   - *The random log is not statistically uniform over the pool.* Item frequency has CV 0.196 and χ² = 43,944 on 7,343 degrees of freedom (p ≈ 0). Every pool item appears, but the draft's sanity check ("close to uniform") holds only loosely. Report the CV and χ² rather than claim uniformity.
-  - *`is_hate` is too rare for a percentile threshold.* See §4.2 step 6: the draft's clickbait rule needs the `> 0` guard to mean anything.
   - *Satisfaction is too sparse for per-user accuracy.* Most candidate sets hold no satisfaction positive. On calibration, `gauc[satisfaction]` and `ndcg@k[satisfaction]` exclude 7,357 of 8,186 users, so these cells rest on about 10% of users.
-  - *Bootstrap CIs of set-based metrics are biased* (§7.4 caveat). The draft asks for a user-level bootstrap CI on every cell. For `coverage`, and potentially `gini` and `exposure_entropy`, that CI can fail to cover the point estimate. This was observed for `coverage`.
+  - *Bootstrap CIs of set-based metrics are biased* (§7.4 caveat). The draft asks for a user-level bootstrap CI on every cell. For a set-based metric such as `gini`, that CI can fail to cover the point estimate.
   - *The default search grid is too narrow for MF on click.* The tuning winner (`lr = 1e-2`, `weight_decay = 1e-5`) sits on a corner of the grid. Two other points (`weight_decay = 1e-5` with `lr = 1e-3` and with `lr = 3e-3`) reach `max_epochs = 50` with their best epoch at 47–49. A fixed tuning budget only treats methods equally if each method's grid contains its optimum.
 
 ## 12. Extension points
@@ -615,10 +574,9 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 | Addition | Where it plugs in |
 |---|---|
 | `full` split | `data/preprocess.py` split definition; `experiments/*.toml` `split = "full"` |
-| PDA / MACR | `TorchRecommender.adjust_scores` + `batch_loss` (PDA: §13.1, MACR: §13.5) |
-| IPS / SNIPS / DR | `sample_weight` / `loss`; diagnostics (max weight, ESS) logged once per run from `fit` (IPS: §13.3) |
-| D2Q / duration-quantile label | `batch_loss` with a target built in `fit` + `adjust_scores` (§13.2) |
-| AutoDebias | a `Recommender` whose `fit` also consumes calibration rows; flagged `uses_calibration_for_training` in MLflow |
+| MACR | done: `TorchRecommender.adjust_scores` + `batch_loss` (§13.1) |
+| IPS | done: `sample_weight` / `loss`; diagnostics (max weight, ESS) logged once per run from `fit` (§13.3) |
+| D2Q / duration-quantile label | done: `batch_loss` with a target built in `fit` + `adjust_scores` (§13.2) |
 | DeepFM | new `Backbone` reading `TrainData.user_features` / `item_features` (§4.2 step 8) |
 | Raw watch time training | done: Naive MF regression + NDCG@10 selection (§13.2) |
 | Paired tests + Holm | `evaluation/bootstrap.py` over `per_user.parquet` of two sweeps |
@@ -631,13 +589,13 @@ Common protocol, so that only the correction varies:
 - A method's frontier knob is not in `[search]`. Each knob value is one `kr-sweep` with `--model.<knob> <value>` (tuning, then 5 final seeds), and the curve is the set of those sweeps. Calibration selection always scores the method's inference-time output (`score` → `adjust_scores`).
 - The training loop calls `batch_loss(batch)` once per batch (§5.4). Its default is `loss(backbone(u, i), target, sample_weight(batch))`, so Naive MF is unchanged: a deterministic rerun reproduces the iteration-1 tuning scores exactly.
 
-### 13.1 PD / PDA (`recommenders/pda.py`, `configs/recommenders/pda.toml`)
+### 13.1 MACR (`recommenders/macr.py`, `configs/recommenders/macr.toml`)
 
-- **Training:** `logit(u, i, row) = f(u, i) + γ · log m_i^t`, BCE on the logged exposures, where `f` is the MF backbone and `t` is the row's stage.
-  - The paper's `P(c | u, i, m) = ELU'(f) · m^γ` with BPR is moved to logit space, i.e. the odds factorise as `e^f · m^γ`. This keeps the pointwise BCE of §5.3. PD's ranking by `f` remains exact, because `Σ_z P(z) σ(f + γ log z)` increases with `f`.
-  - Local popularity: the train window is cut into `n_stages = 10` equal-time stages (the paper's 10; on `guarded` the last stage holds 27,619 rows). `m_i^t = (c_i^t + 1) / (N_t + n_items) · n_items`, where `c_i^t` counts the item's train **exposures** in stage `t`. Exposures, not clicks, because the confounding path is popularity → exposure and the logs record exposures directly. Add-one smoothing keeps items unseen in a stage finite, and the `n_items` factor centres a uniformly exposed item at `log m = 0`.
-- **Inference:** `f(u, i) + γ̃ · log m̃_i`, with `m̃_i` the last-stage popularity (the paper's method (a); its linear forecast (b) is not implemented). `γ̃ = 0` is PD and `γ̃ > 0` is PDA. `m̃` is a buffer of the backbone and is saved in `best.pt`.
-- **Knob:** `gamma ∈ {0.02, 0.05, 0.1, 0.15, 0.2, 0.25}` (the paper's search range), each once with `gamma_infer = 0` (PD) and once with `gamma_infer = gamma` (PDA, the paper's practice). `gamma = gamma_infer = 0` is exactly Naive MF.
+- **Branches** (Eq. 7): `ŷ_k` is the MF backbone logit, unchanged, because MACR is model-agnostic and takes the existing recommender as its matching branch. The item module is `ŷ_i = w_i · q_i + b'_i` and the user module is `ŷ_u = w_u · p_u + b'_u`: linear layers on the backbone's embeddings (the paper: "can be implemented as multi-layer perceptrons").
+  - Departure: the paper's MF has no bias terms. Here `ŷ_k` keeps the backbone's per-item bias `b_i`, so the part of the item's direct effect that `b_i` absorbs stays in the matching branch and is not removed at inference. Dropping `b_i` would change the backbone that §13 holds fixed.
+- **Training** (Eq. 8): `BCE(ŷ_k σ(ŷ_i) σ(ŷ_u)) + α BCE(ŷ_i) + β BCE(ŷ_u)` on the logged exposures, with the paper's defaults `α = β = 1e-3`.
+- **Inference** (Eq. 9): rank by `(ŷ_k − c) σ(ŷ_i) σ(ŷ_u)`. `c = 0` ranks by the total effect, i.e. MACR's training without counterfactual inference.
+- **Knob:** `c ∈ {0, 10, 20, 30, 40, 60, 100}`. This covers the paper's tuned range {20, …, 40}. With the paper's α and β, the learned `σ(ŷ_i)` spans only about 0.98–1.00 on `guarded`, so `c` has to be large before `c · Δσ(ŷ_i)` competes with the spread of `ŷ_k` (about −1.6 to 1.0 between the 1st and 99th percentiles). A calibration-only check on one tuning model gave an unmasked top-10 ARP, over 3,000 calibration users, of 1,968 → 869 as `c` goes from 0 to 100, while calibration GAUC fell from 0.5460 to 0.5434.
 
 ### 13.2 Raw watch time: VR baseline and D2Q (`recommenders/naive_mf.py`, `recommenders/d2q.py`)
 
@@ -649,33 +607,14 @@ Common protocol, so that only the correction varies:
   - Inference with `rank_by = "watch_time"` (the published D2Q) ranks by Φ̂_k⁻¹(h). The inverse CDF of each group is stored at 1,001 levels and interpolated linearly. With `rank_by = "quantile"`, it ranks by h, which is the methodology's duration-quantile label. Item groups and inverse CDFs are backbone buffers, saved in `best.pt`. Items outside the train duration range take the first or last group.
 - **Knob:** `n_groups ∈ {1, 10, 20, 30, 60, 100}`: the paper's grid {1, 10, 20, 30, 50, 100}, with 50 replaced by 60, the KuaiRand-Pure setting used by D2Co and CWM. Each value is run once per `rank_by`. With `n_groups = 1`, both rankings are monotone in h and differ only through ties of the inverse CDF.
 
-### 13.3 IPS with a popularity propensity (`recommenders/ips.py`, `configs/recommenders/ips.toml`)
+### 13.3 IPS with a feature-based propensity (`recommenders/ips_feature.py`, `configs/recommenders/ips_feature.toml`)
 
-- **Target of the correction:** the loss under uniform item exposure, which is the condition of the random-exposure log. The popularity propensity of a row's item is `p_i = n_i / max_j n_j`, with `n_i = pop_exposure`, the item's train exposure count. Items with no train rows never need a weight. The exponent is 1, so `1/p` is the item-marginal density ratio between uniform and logged exposure. Exposure counts are used rather than click counts because the logs record exposures, and with exposure counts an exponent of 1 is the exact marginal ratio. The square-root smoothing that some methods apply to click-count propensities is not used: clipping is the only variance control.
-- **Weights:** `w = 1/p` rescaled so that the smallest weight is 1, clipped at `clip`, then divided by the train mean. After rescaling, `clip` is the largest allowed ratio between any two weights. How much a given `clip` clips depends on the tail of the propensity model, so compare models on the logged ESS share.
-- **Loss:** `mean(w · BCE)` over the batch. Because the weights have train mean 1, this is the IPS estimator with its fixed normaliser. The weighted default of `TorchRecommender.loss`, `Σ w·ℓ / Σ w` per batch, is SNIPS (§13.4).
-- **Diagnostics,** logged once per run to MLflow and `train_log.jsonl`: `ips_max_weight` (after normalisation), `ips_ess_share` = (Σw)² / (N Σw²), and `ips_clipped_share`. On `guarded`, the unclipped weights have a maximum of 153 and an ESS share of 0.105.
-- **Knob:** `clip ∈ {10, 30, 100, 300, 1000, inf}`. On `guarded` this spans ESS shares of 0.91, 0.74, 0.50, 0.31, 0.18 and 0.105. A clip of 3 already clips 91% of rows and is almost Naive MF.
-
-### 13.4 SNIPS (`recommenders/snips.py`, `configs/recommenders/snips.toml`)
-
-- Same propensity, weights, clipping and diagnostics as IPS (§13.3). The loss is `Σ w·BCE / Σ w` over the batch, the self-normalised estimator.
-- The propensities do not depend on the model, so over the full train set the SNIPS normaliser `Σ w` is a constant. SNIPS and IPS therefore share a minimiser, and SNIPS's control variate (Swaminathan & Joachims) acts only through the per-batch normaliser. Each batch's loss becomes a convex combination of its per-row losses, so batches that draw a few very large weights do not take larger steps. The difference should grow with `clip` and vanish as the weights become uniform.
-- **Knob:** the IPS grid, `clip ∈ {10, 30, 100, 300, 1000, inf}`.
-
-### 13.5 MACR (`recommenders/macr.py`, `configs/recommenders/macr.toml`)
-
-- **Branches** (Eq. 7): `ŷ_k` is the MF backbone logit, unchanged, because MACR is model-agnostic and takes the existing recommender as its matching branch. The item module is `ŷ_i = w_i · q_i + b'_i` and the user module is `ŷ_u = w_u · p_u + b'_u`: linear layers on the backbone's embeddings (the paper: "can be implemented as multi-layer perceptrons").
-  - Departure: the paper's MF has no bias terms. Here `ŷ_k` keeps the backbone's per-item bias `b_i`, so the part of the item's direct effect that `b_i` absorbs stays in the matching branch and is not removed at inference. Dropping `b_i` would change the backbone that §13 holds fixed.
-- **Training** (Eq. 8): `BCE(ŷ_k σ(ŷ_i) σ(ŷ_u)) + α BCE(ŷ_i) + β BCE(ŷ_u)` on the logged exposures, with the paper's defaults `α = β = 1e-3`.
-- **Inference** (Eq. 9): rank by `(ŷ_k − c) σ(ŷ_i) σ(ŷ_u)`. `c = 0` ranks by the total effect, i.e. MACR's training without counterfactual inference.
-- **Knob:** `c ∈ {0, 10, 20, 30, 40, 60, 100}`. This covers the paper's tuned range {20, …, 40}. With the paper's α and β, the learned `σ(ŷ_i)` spans only about 0.98–1.00 on `guarded`, so `c` has to be large before `c · Δσ(ŷ_i)` competes with the spread of `ŷ_k` (about −1.6 to 1.0 between the 1st and 99th percentiles). A calibration-only check on one tuning model gave an unmasked top-10 ARP, over 3,000 calibration users, of 1,968 → 869 as `c` goes from 0 to 100, while calibration GAUC fell from 0.5460 to 0.5434.
-
-### 13.6 IPS with a feature-based propensity (`recommenders/ips_feature.py`, `configs/recommenders/ips_feature.toml`)
-
+- **Target of the correction:** the loss under uniform item exposure, which is the condition of the random-exposure log. Each logged train row is weighted by its inverse exposure propensity, estimated from user and item side features. Clipping is the only variance control.
 - **Propensity model:** a factorization machine (logit = `b + Σ_f w[x_f] + Σ_{f<g} ⟨v[x_f], v[x_g]⟩`, factor size 8) over the 25 user fields and 7 item fields of §4.2 step 8. It has no user or item ids, so it cannot memorise item popularity. Schnabel et al.'s covariate propensity is a logistic regression; the FM is that regression plus pairwise interactions, which are needed for the reason in the next bullet.
-- **Training,** inside `fit`, before the MF: every logged train exposure `(u, i)` is a positive and gets one negative `(u, j)`, with `j` uniform over the pool. Negatives are redrawn every epoch. The loss is BCE(pos) + BCE(neg), trained with Adam (lr 1e-2, batch 65,536) for 15 epochs. On `guarded` the loss plateaus by then: 1.2507 after 5 epochs, 1.2123 after 10, 1.2065 after 15. The generator is seeded with the run seed, so the propensity varies with the seed like every other part of the run.
-  - With 1:1 matched sampling the odds estimate `P_log(i | u) / P_uniform(i | u)`, so the inverse propensity of a train row is `exp(−logit)`. This is the same target as the popularity propensity, uniform item exposure for each user, but conditioned on features.
+- **Propensity training,** inside `fit`, before the MF: every logged train exposure `(u, i)` is a positive and gets one negative `(u, j)`, with `j` uniform over the pool. Negatives are redrawn every epoch. The loss is BCE(pos) + BCE(neg), trained with Adam (lr 1e-2, batch 65,536) for 15 epochs. On `guarded` the loss plateaus by then: 1.2507 after 5 epochs, 1.2123 after 10, 1.2065 after 15. The generator is seeded with the run seed, so the propensity varies with the seed like every other part of the run.
+  - With 1:1 matched sampling the odds estimate `P_log(i | u) / P_uniform(i | u)`, so the inverse propensity of a train row is `exp(−logit)`. A popularity propensity `p_i = n_i / max_j n_j` (`n_i = pop_exposure`) estimates the same ratio marginalised over users and without features.
   - Because each negative has the positive's user, user-only terms cannot separate the classes. User fields act only through their interactions with item fields, which makes the propensity user-dependent.
-- **Weights, clipping and loss:** IPS's (§13.3). **Extra diagnostics:** `propensity_loss` per epoch; `propensity_auc`, the AUC of 200k logged rows against as many fresh uniform negatives; and `propensity_pop_spearman`, the Spearman correlation between the feature and popularity inverse propensities over train rows. For seed 0 on `guarded`: AUC 0.734 and Spearman 0.459. The unclipped max/min weight ratio is about 6.4·10⁴, against 9,110 for the popularity propensity.
-- **Knob:** `clip ∈ {10, 30, 100, 300, 1000, 2000, 4000, 8000, inf}`, with the same definition as in IPS (largest weight relative to the smallest). The smallest FM weight is an outlier: the 1st percentile of w/min is 68 and the median is 386. So clips up to 300 clip 64–100% of rows and leave the model close to Naive MF. The informative range is 300–8000, with seed-0 ESS shares 0.95, 0.73, 0.59, 0.49 and 0.44 at 300, 1000, 2000, 4000 and 8000, and 0.41 unclipped. Compare propensity models on the logged ESS share, not on the raw `clip` value.
+- **Weights:** `w = 1/p` rescaled so that the smallest weight is 1, clipped at `clip`, then divided by the train mean. After rescaling, `clip` is the largest allowed ratio between any two weights. How much a given `clip` clips depends on the tail of the propensity model, so the logged ESS share, not the raw `clip` value, measures how much variance control a setting applies.
+- **Loss:** `mean(w · BCE)` over the batch. Because the weights have train mean 1, this is the IPS estimator with its fixed normaliser. It overrides the weighted default of `TorchRecommender.loss`, `Σ w·ℓ / Σ w` per batch, which is the self-normalised estimator.
+- **Diagnostics,** logged to MLflow and `train_log.jsonl`. Once per run: `ips_max_weight` (after normalisation), `ips_ess_share` = (Σw)² / (N Σw²), `ips_clipped_share`, `propensity_auc` (the AUC of 200k logged rows against as many fresh uniform negatives) and `propensity_pop_spearman` (the Spearman correlation over train rows between the feature inverse propensity and the popularity inverse propensity `max_j n_j / n_i`). Per propensity epoch: `propensity_loss`. For seed 0 on `guarded`: AUC 0.734 and Spearman 0.459. The unclipped max/min weight ratio is about 6.4·10⁴, against 9,110 for the popularity inverse propensity.
+- **Knob:** `clip ∈ {10, 30, 100, 300, 1000, 2000, 4000, 8000, inf}`. The smallest FM weight is an outlier: the 1st percentile of w/min is 68 and the median is 386. So clips up to 300 clip 64–100% of rows and leave the model close to Naive MF. The informative range is 300–8000, with seed-0 ESS shares 0.95, 0.73, 0.59, 0.49 and 0.44 at 300, 1000, 2000, 4000 and 8000, and 0.41 unclipped. Report the logged ESS share next to the `clip` value.

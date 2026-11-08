@@ -1,4 +1,4 @@
-# IPS with a feature-based (FM) propensity on the MF backbone (spec §13.6).
+# IPS with a feature-based (FM) propensity on the MF backbone (spec §13.3).
 # Frontier: sweep `clip`.
 [model]
 embedding_dim = 64

@@ -1,3 +1,0 @@
-recommender = "ips"
-train_label = "click"
-split = "guarded"
