@@ -12,22 +12,18 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 ROOT = Path("/home/xplus/cp4285-proj")
-PANEL = "b1b6eb50c0c9e9823c1c07697f08328bea8064ade49bdcf48195fbe9cadee089"
+# Test aggregates of the current configs/panel.toml (adds jsd_dur and dur_bin_share); every sweep was evaluated under it.
+PANEL = "b65bf47ef9c2e2c33ad07fc1c533f67e41fe560388225f0ea02e7952981b6588"
 OUT = ROOT / ".presentation/assets/data.js"
 
 METRICS = [
-    "gauc[click]", "gauc[long_view]", "gauc[watch_ratio]", "gauc[satisfaction]",
+    "gauc[click]", "gauc[long_view]", "gauc[watch_ratio]", "gauc[satisfaction]", "xgauc[raw_watch_time]",
     "ndcg@10[click]", "ndcg@10[long_view]", "ndcg@10[watch_ratio]", "ndcg@10[raw_watch_time]", "ndcg@10[satisfaction]",
     "arp@10", "aplt@10", "gini@10", "coverage@10", "exposure_entropy@10",
-    "rsp_pop@10", "reo_pop@10[click]", "calibration_kl_pop@10",
-    "list_duration@10[click].mean", "list_duration@10[click].median", "list_duration@10[click].ref_mean",
-    "list_duration@10[watch_ratio].ref_mean",
     "wasserstein_duration@10[click]", "wasserstein_duration@10[watch_ratio]",
-    "rsp_dur@10", "reo_dur@10[click]", "calibration_kl_dur@10",
-    "clickbait_share@10",
-    "ndcg_by_group@10[click|activity].gap", "ndcg_by_group@10[click|mainstream].gap", "ndcg_by_group@10[click|dur_pref].gap",
-    "ndcg_by_group@10[click|mainstream].high", "ndcg_by_group@10[click|mainstream].low",
-    "ndcg_by_group@10[click|dur_pref].short", "ndcg_by_group@10[click|dur_pref].long",
+    "list_duration@10[click].mean", "list_duration@10[click].ref_mean", "list_duration@10[watch_ratio].ref_mean",
+    "jsd_dur@10[click]", "jsd_dur@10[long_view]",
+    *[f"dur_bin_share@10[click].{side}_{j}" for side in ("list", "ref") for j in range(5)],
 ]
 DIAG = ["ips_ess_share", "ips_max_weight", "ips_clipped_share", "propensity_auc", "propensity_pop_spearman", "d2q_groups"]
 
@@ -68,12 +64,8 @@ def describe(p):
     g = lambda k: p.get(f"recommender.model.{k}")
     if name == "mf":
         return ("naive_mf", None) if p.get("label", "click") == "click" else ("vr", None)
-    if name == "pda":
-        return ("pd" if float(g("gamma_infer")) == 0 else "pda", float(g("gamma")))
     if name == "d2q":
         return ("d2q" if g("rank_by") == "watch_time" else "d2q_q", int(g("n_groups")))
-    if name in ("ips", "snips"):
-        return ({"ips": "ips_pop", "snips": "snips"}[name], float(g("clip")))
     if name == "ips_feature":
         return ("ips_feat", float(g("clip")))
     if name == "macr":
@@ -129,35 +121,31 @@ for x in sweeps:
         diag=diag(x["runs"]), metrics=m,
     ))
 
-order = ["naive_mf", "vr", "pd", "pda", "d2q", "d2q_q", "ips_pop", "snips", "macr", "ips_feat"]
+order = ["naive_mf", "vr", "d2q", "d2q_q", "macr", "ips_feat"]
 records.sort(key=lambda r: (order.index(r["method"]), float("inf") if r["knob"] == "inf" else (r["knob"] or 0)))
 
 # Dataset facts used on the master page.
-items = pd.read_parquet(ROOT / "data/processed/guarded/items.parquet")
-train = pd.read_parquet(ROOT / "data/processed/guarded/train.parquet", columns=["item_idx", "time_ms"])
-lo, hi = train.time_ms.min(), train.time_ms.max()
-stage = np.minimum(((train.time_ms - lo) / (hi - lo + 1) * 10).astype(int), 9)
-last = np.bincount(train.item_idx[stage == 9], minlength=len(items))
+items = pd.read_parquet(ROOT / "data/processed/guarded/items.parquet", columns=["pop_exposure", "duration_ms", "dur_bin"])
+n_train_rows = len(pd.read_parquet(ROOT / "data/processed/guarded/train.parquet", columns=["item_idx"]))
 manifest = json.loads((ROOT / "data/processed/guarded/manifest.json").read_text())
-top200 = np.argsort(-items.pop_exposure.values)[:200]
+pop_rank = items.pop_exposure.rank(method="first", ascending=False).values - 1  # 0 = most exposed
+head = pop_rank < 0.2 * len(items)
+pop_quintile = 4 - (pop_rank * 5 // len(items)).astype(int)  # 0 = least exposed fifth, 4 = most exposed
+top200 = pop_rank < 200
 facts = dict(
     n_items=int(len(items)),
-    n_train_rows=int(len(train)),
-    head_share_exposure=float(items.pop_exposure[items.is_head].sum() / items.pop_exposure.sum()),
+    n_train_rows=int(n_train_rows),
+    head_share_exposure=float(items.pop_exposure[head].sum() / items.pop_exposure.sum()),
     rho_pop_dur=float(spearmanr(items.pop_exposure, items.duration_ms)[0]),
-    rho_recentpop_dur=float(spearmanr(last, items.duration_ms)[0]),
     median_dur_pool_s=float(items.duration_ms.median() / 1000),
-    median_dur_head_s=float(items.duration_ms[items.is_head].median() / 1000),
-    median_dur_tail_s=float(items.duration_ms[~items.is_head].median() / 1000),
-    median_dur_top200_s=float(np.median(items.duration_ms.values[top200]) / 1000),
-    median_dur_by_pop_bin_s=[float(v) / 1000 for v in items.groupby("pop_bin").duration_ms.median().values],
+    median_dur_top200_s=float(items.duration_ms[top200].median() / 1000),
+    median_dur_by_pop_quintile_s=[float(v) / 1000 for v in items.duration_ms.groupby(pop_quintile).median().values],
+    dur_bin_range_s=[[float(v.min()) / 1000, float(v.max()) / 1000] for _, v in sorted(items.duration_ms.groupby(items.dur_bin))],
     rows=manifest["rows"],
     users={k: manifest["users"][k] for k in ("train", "calibration", "test")},
     items_dropped=manifest["drops"]["items"],
     positive_rates={part: {lab: v["mean"] for lab, v in d.items()} for part, d in manifest["positive_rates"].items()},
     random_item_cv=manifest["checks"]["random_item_uniformity"]["cv"],
-    duration_quantiles_s=manifest["checks"].get("duration_quantiles"),
-    clickbait_items=manifest["item_meta"]["clickbait"].get("n_items"),
 )
 
 OUT.parent.mkdir(parents=True, exist_ok=True)

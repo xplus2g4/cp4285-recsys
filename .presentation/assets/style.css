@@ -90,8 +90,7 @@ span.sig { padding: 0 4px; border-radius: 3px; font-weight: 600; }
 .widget button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 /* method cards on the index */
-.mcard { display: block; text-decoration: none; color: inherit; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; transition: box-shadow .15s, border-color .15s; }
-.mcard:hover { border-color: #93c5fd; box-shadow: 0 4px 14px rgba(30,64,175,.12); }
+.mcard { display: block; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: #fff; }
 .mcard h3 { margin: 0 0 4px; }
 .mcard p { font-size: 14px; margin: 6px 0 0; }
 
