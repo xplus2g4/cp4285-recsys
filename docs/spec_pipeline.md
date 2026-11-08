@@ -89,7 +89,7 @@ src/cp4285_proj/
     registry.py        # @register_metric, MetricKind
     accuracy.py        # gauc, ndcg
     popularity.py      # arp, gini, aplt, rsp, reo (pop groups)
-    duration.py        # list_duration, wasserstein_duration, rsp/reo (dur groups)
+    duration.py        # list_duration, wasserstein_duration, jsd_dur, dur_bin_share, rsp/reo (dur groups)
     coverage.py        # coverage, exposure_entropy
     groups.py          # ndcg_by_group, calibration_kl
     clickbait.py       # clickbait_share
@@ -510,6 +510,8 @@ Notation:
 | `reo_pop`, `reo_dur` | global | k, label | Ranking-based equal opportunity: the same as RSP with P_a = Σ_u \|L_u ∩ G_a ∩ Pos_u\| / Σ_u \|G_a ∩ Pos_u\|, where Pos_u = distinct items in `C_u` with `rel`. NaN if some bin has no positives. |
 | `list_duration` | global | k, label | `{mean, median}` of `duration_ms` over all items in all `L_u` (pooled), `{ref_mean, ref_median}` over relevant candidate rows, and `{delta_mean, delta_median}` |
 | `wasserstein_duration` | global | k, label | `scipy.stats.wasserstein_distance` between the durations (seconds) of pooled `L_u` items and of relevant candidate rows |
+| `jsd_dur` | per_user | k, label | User Popularity Deviation style (Abdollahpouri et al., UMAP '21), over the 5 `dur_bin` groups: Jensen–Shannon divergence, base 2 (so in [0, 1]), between p = the share of the user's relevant candidate rows in each bin and q = the share of `L_u` in each bin. The target is the user's engagement on random exposure, not the policy-shaped history `calibration_kl_dur` uses. NaN for users with no relevant candidate row. |
+| `dur_bin_share` | global | k, label | `{list_j}`: share of all `L_u` slots (pooled) in `dur_bin` j; `{ref_j}`: share of all relevant candidate rows in bin j. The pooled ingredients of `jsd_dur`, for plots. |
 | `ndcg_by_group` | per_group | k, label, grouping ∈ {activity, mainstream, dur_pref} | mean `ndcg` per group, plus `gap` |
 | `calibration_kl_pop`, `calibration_kl_dur` | per_user | k | Steck's C_KL = KL(p ‖ q̃), with p = `hist_dist`, q = the share of `L_u` in each bin, q̃ = (1−α)q + αp, α = 0.01. NaN for `no_history` users. |
 | `clickbait_share` | per_user | k | share of `L_u` with `is_clickbait` |
@@ -588,7 +590,7 @@ Fields beyond the TOML above, with dataclass defaults: `PipelineConfig.device = 
 9. `kr-evaluate <final_run> --split test` writes the test predictions and the panel output. Evaluating a non-final run on test raises an error. A second test evaluation warns and records `test_eval_count = 2`.
 10. Adding a `[[metric]]` entry for a newly registered function, or deleting an entry, then rerunning `kr-evaluate`, gives results under a new panel hash. No retraining and no rescoring happen, because the existing `pred/` files are reused.
 11. An unknown metric name, an unknown parameter, `k > K_max` or an unknown label in `panel.toml` fails before any metric is computed.
-12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `xgauc` (score ties, equal-label exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini`, `rsp`/`reo`, `calibration_kl` (including smoothing) and `wasserstein_duration`.
+12. Metric correctness: unit tests with small hand-computed fixtures cover `gauc` (including single-class exclusion and candidate-count weighting), `xgauc` (score ties, equal-label exclusion and candidate-count weighting), `ndcg` (binary, graded and truncation), `gini`, `rsp`/`reo`, `calibration_kl` (including smoothing), `wasserstein_duration` and `jsd_dur`/`dur_bin_share` (including the no-positive exclusion).
 13. `kr-evaluate --sweep <id> --split test` writes the mean ± std over the 5 seeds and a 95% bootstrap CI for every panel instance.
 14. `kr-rescore <run_id> --k 200` rewrites `topk.parquet` with 200 columns, and a panel entry with `k = 200` then passes validation.
 

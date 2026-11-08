@@ -58,6 +58,16 @@ k = [10, 20]
 labels = "all"
 
 [[metric]]
+name = "jsd_dur"
+k = [10, 20]
+labels = "all"
+
+[[metric]]
+name = "dur_bin_share"
+k = [10, 20]
+labels = "all"
+
+[[metric]]
 name = "rsp_dur"
 k = [10, 20]
 

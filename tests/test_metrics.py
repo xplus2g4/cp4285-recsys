@@ -11,7 +11,7 @@ from conftest import make_bundle
 
 from cp4285_proj.evaluation.panel import parse_panel, run_panel
 from cp4285_proj.metrics.accuracy import gauc, gauc_value, ndcg, xgauc
-from cp4285_proj.metrics.duration import list_duration, wasserstein_duration
+from cp4285_proj.metrics.duration import dur_bin_share, jsd_dur, list_duration, wasserstein_duration
 from cp4285_proj.metrics.groups import calibration_kl_pop, ndcg_by_group
 from cp4285_proj.metrics.popularity import gini, gini_coefficient, reo_pop, rsp_pop
 
@@ -186,6 +186,26 @@ def test_wasserstein_and_list_duration_pool_lists_against_relevant_rows():
     d = list_duration(b, k=1, label="click")
     assert (d["mean"], d["median"], d["ref_mean"], d["ref_median"]) == pytest.approx((15_000, 15_000, 25_000, 25_000))
     assert d["delta_mean"] == pytest.approx(-10_000)
+
+
+def test_jsd_dur_per_user_and_pooled_bin_shares():
+    # 10 items, dur_bin = item // 2. u0: list bins {0, 1}, relevant rows items 0, 1 (both bin 0);
+    # u1: list bins {4, 4}, relevant item 9 (bin 4) → identical distributions; u2: no relevant row
+    b = make_bundle(
+        cand_user_pos=[0, 0, 1, 2],
+        cand_item=[0, 1, 9, 4],
+        cand_score=[0.0] * 4,
+        topk=[[0, 2], [8, 9], [4, 5]],
+        labels={"click": [1, 1, 1, 0]},
+    )
+    v = jsd_dur(b, k=2, label="click")
+    # p = [1, 0], q = [.5, .5], m = [.75, .25]: (log2(4/3) + .5·log2(2/3) + .5·log2(2)) / 2
+    assert v[0] == pytest.approx((math.log2(4 / 3) + 0.5 * math.log2(2 / 3) + 0.5) / 2)
+    assert v[1] == pytest.approx(0.0)
+    assert np.isnan(v[2])
+    s = dur_bin_share(b, k=2, label="click")
+    assert [s[f"list_{j}"] for j in range(5)] == pytest.approx([1 / 6, 1 / 6, 2 / 6, 0, 2 / 6])
+    assert [s[f"ref_{j}"] for j in range(5)] == pytest.approx([2 / 3, 0, 0, 0, 1 / 3])
 
 
 # --------------------------------------------------------------------------- groups + resampling
