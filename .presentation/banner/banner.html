@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Squeeze the Balloon: banner</title>
+<!--
+  Animated 400×200 banner (three.js). One rubber balloon, centred, pinches itself at the waist; the air pushed out of
+  the waist inflates and stretches the two ends. The waist is popularity (raspberry), the ends exposure (petrol blue)
+  and duration (saffron), on a warm cream background, each named by a label underneath.
+
+  Physics (1-D along the balloon axis), exaggerated for comedy:
+    - rest outline r0(x): a round, slightly elongated balloon;
+    - an off-centre pinch caps the radius at the waist: each side is a sphere centred on the axis through the neck
+      radius (soft minimum, so the surface stays smooth);
+    - conserving the air volume ∫πr² dx gives how much the ends should inflate; the exposure end swells 2.3× and the
+      duration end 1.5× that, each stretching lengthwise and growing taller than deep (squash and stretch);
+    - the pinch and each end follow their targets through damped springs at different rates, so the pinch snaps
+      shut, the ends wobble out of step and the balloon rocks towards its heavier end;
+    - where the rubber is compressed next to the waist it folds into lengthwise wrinkles.
+  The simulation runs three loops and keeps the last, so the GIF loops without a jump.
+
+  Content sits in a centred safe area with ≥ 20 px of white on every side. Open as-is for a live preview;
+  ?t=0.5 freezes one frame. Capture sets #banner[data-t] and waits for data-rendered.
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #fff; }
+  #banner { width: 400px; height: 200px; position: relative; overflow: hidden; background: #f6f1e7; }   /* warm cream paper */
+  #banner canvas, #banner svg { position: absolute; left: 0; top: 0; }
+  svg text { font-family: Inter, sans-serif; font-weight: 700; font-size: 10.5px; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="banner">
+  <svg width="400" height="200" viewBox="0 0 400 200">
+    <g text-anchor="middle" dominant-baseline="central">
+      <text id="t-exp" fill="#00687a">Exposure</text>
+      <text id="t-pop" fill="#b8334a">Popularity</text>
+      <text id="t-dur" fill="#a8701a">Duration</text>
+    </g>
+  </svg>
+</div>
+<script type="module">
+import * as THREE from "three";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const W = 400, H = 200, PERIOD = 4.5;
+const COL = { pop: "#d1495b", exp: "#00798c", dur: "#edae49" };   // raspberry, petrol blue, saffron
+
+// ---------- balloon model ----------
+// The outline is parametrised by the rest coordinate u ∈ [-1, 1]; the left (exposure) end sits at x = -LH·eL and the
+// right (duration) end at x = +LH·eR, so each end stretches on its own. The waist is off-centre (XC), and each end
+// inflates by its own factor (kL, kR), blended smoothly across the waist.
+const R = 0.5, LH = 0.82, XC = 0.1, UC = XC / LH; // rest radius, half-length, waist position (world units)
+const r0 = (u) => { const a = Math.min(1, Math.abs(u)); return R * Math.pow(1 - Math.pow(a, 2.2), 1 / 2.2); };
+const smin = (a, b, k) => -k * Math.log(Math.exp(-a / k) + Math.exp(-b / k));
+const ease = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+// waist radius: far outside the rubber at q = 0 (no trace of the pinch at rest), tight at q = 1
+const neck = (q) => { const c = Math.min(1, q); return R * (0.3 + 1.3 * (1 - c) * (1 - c)); };
+// pinch cap (dx = distance from the waist): each side is a sphere centred on the axis that passes through the neck
+// radius at the waist, so the halves meet like a twisted balloon; the crease is rounded off (soft |dx|). The sphere is
+// a little larger than the lobe, so the soft minimum hands over to the lobe before the sphere's top (no ridge)
+function cap(dx, q, k) {
+  const rn = neck(q), d = Math.sqrt(dx * dx + 0.03 * 0.03) - 0.03;
+  const rho = Math.sqrt(Math.max(0.01, (1.12 * k * R) ** 2 - rn * rn));
+  return Math.sqrt(rn * rn + 2 * rho * Math.min(d, rho) - Math.min(d, rho) ** 2);
+}
+const stretch = (k) => 1 + 0.5 * (k - 1);        // the ends lengthen as they inflate
+// position, radius and local inflation of the ring at rest coordinate u
+function ring(u, q, kL, kR, eL, eR) {
+  const x = u * LH * (u < 0 ? eL : eR), k = kL + (kR - kL) * ease((u - UC + 0.35) / 0.7);
+  return { x, k, r: smin(k * r0(u), cap(x - XC, q, k), 0.035) };
+}
+function volume(q, k, e) {
+  const n = 600; let v = 0;
+  for (let i = 0; i < n; i++) { const r = ring(-1 + (2 * (i + 0.5)) / n, q, k, k, e, e).r; v += r * r; }
+  return Math.PI * v * LH * e * (2 / n);
+}
+const V0 = volume(0, 1, 1);
+// equilibrium inflation for each pinch level if the air were conserved exactly
+const K_TABLE = Array.from({ length: 101 }, (_, i) => {
+  const q = i / 100; let lo = 1, hi = 2;
+  for (let it = 0; it < 40; it++) { const m = (lo + hi) / 2; volume(q, m, stretch(m)) < V0 ? (lo = m) : (hi = m); }
+  return (lo + hi) / 2;
+});
+const kTarget = (q) => { const f = Math.min(100, Math.max(0, q * 100)), i = Math.floor(f), j = Math.min(100, i + 1); return K_TABLE[i] + (K_TABLE[j] - K_TABLE[i]) * (f - i); };
+// comic exaggeration: the ends swell well past what the air allows, the exposure end more than the duration end
+const GAIN_L = 2.3, GAIN_R = 1.5;
+
+// ---------- motion: scripted pinch through springs ----------
+function pinch(t) {                              // target pinch: tighten, hold, let go at once (the springs add the snap and boing)
+  const p = ((t % 1) + 1) % 1;
+  if (p < 0.12) return 0;
+  if (p < 0.3) return ease((p - 0.12) / 0.18);
+  if (p < 0.6) return 1;
+  return 0;
+}
+const FRAMES = 72;
+const STATES = (() => {
+  const dt = 1 / 1200, steps = Math.round(PERIOD / dt), out = [];
+  // [value, velocity, ω (rad/s), ζ]: the pinch snaps with a little overshoot; the two ends wobble at different rates
+  const S = { q: [0, 0, 2 * Math.PI * 3.2, 0.45], kL: [1, 0, 2 * Math.PI * 2.7, 0.1], kR: [1, 0, 2 * Math.PI * 3.6, 0.12],
+              eL: [1, 0, 2 * Math.PI * 2.2, 0.14], eR: [1, 0, 2 * Math.PI * 2.9, 0.14] };
+  const step = (s, target) => { s[1] += (s[2] * s[2] * (target - s[0]) - 2 * s[3] * s[2] * s[1]) * dt; s[0] += s[1] * dt; };
+  for (let loop = 0; loop < 3; loop++) for (let i = 0; i < steps; i++) {
+    step(S.q, pinch(loop + i / steps));
+    const kt = kTarget(Math.max(0, Math.min(1, S.q[0]))) - 1;
+    step(S.kL, 1 + GAIN_L * kt); step(S.kR, 1 + GAIN_R * kt);
+    step(S.eL, stretch(1 + GAIN_L * kt)); step(S.eR, stretch(1 + GAIN_R * kt));
+    if (loop === 2 && i % (steps / FRAMES) === 0) out.push(Object.fromEntries(Object.entries(S).map(([n, s]) => [n, s[0]])));
+  }
+  return out;
+})();
+const stateAt = (t) => {
+  const f = (((t % 1) + 1) % 1) * FRAMES, i = Math.floor(f) % FRAMES, j = (i + 1) % FRAMES, a = f - Math.floor(f);
+  return Object.fromEntries(Object.keys(STATES[i]).map((n) => [n, STATES[i][n] + (STATES[j][n] - STATES[i][n]) * a]));
+};
+
+// ---------- scene ----------
+const banner = document.getElementById("banner");
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(W, H);
+renderer.setClearColor(0xf6f1e7, 1);                // the banner's cream background
+renderer.toneMapping = THREE.NeutralToneMapping;   // keeps the bias colours close to their hex values
+banner.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
+const camera = new THREE.PerspectiveCamera(20, W / H, 0.1, 50);
+camera.position.set(0, 0, 7.4);
+camera.lookAt(0, 0, 0);
+camera.setViewOffset(W, H, 3, 17, W, H);         // balloon centred left-right, raised to leave room for the labels
+const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(-2, 3, 4); scene.add(key);
+scene.add(new THREE.HemisphereLight(0xffffff, 0xe2d9c6, 0.5));   // warm ground bounce from the cream paper
+
+// balloon surface: NU rings along the axis × NT points around it, positions rebuilt every frame
+const NU = 240, NT = 96;
+const geo = new THREE.BufferGeometry();
+const pos = new Float32Array(NU * NT * 3), colors = new Float32Array(NU * NT * 3), index = [];
+const cExp = new THREE.Color(COL.exp), cPop = new THREE.Color(COL.pop), cDur = new THREE.Color(COL.dur), tmp = new THREE.Color();
+for (let i = 0; i < NU; i++) {
+  const u = -1 + (2 * i) / (NU - 1), w = ease((Math.abs(u * LH - XC) - 0.12) / 0.42);   // red at the waist, blending to the end colours
+  tmp.copy(cPop).lerp(u < 0 ? cExp : cDur, w);
+  for (let j = 0; j < NT; j++) colors.set([tmp.r, tmp.g, tmp.b], (i * NT + j) * 3);
+}
+for (let i = 0; i < NU - 1; i++) for (let j = 0; j < NT; j++) {
+  const a = i * NT + j, b = i * NT + ((j + 1) % NT), c = (i + 1) * NT + j, d = (i + 1) * NT + ((j + 1) % NT);
+  index.push(a, c, b, b, c, d);
+}
+geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+geo.setIndex(index);
+const rubber = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.08, sheen: 0.4, sheenRoughness: 0.5 });
+const balloon = new THREE.Group(); scene.add(balloon);   // tilts as a whole towards the heavier end
+balloon.add(new THREE.Mesh(geo, rubber));
+
+// knot at the right end
+const knotMat = new THREE.MeshPhysicalMaterial({ color: new THREE.Color(COL.dur).multiplyScalar(0.8), roughness: 0.4, clearcoat: 0.6 });
+const knot = new THREE.Mesh(new THREE.LatheGeometry([0, 0.05, 0.06, 0.045, 0.03, 0.06, 0.07, 0].map((r, i) => new THREE.Vector2(r, i * 0.022)), 24), knotMat);
+knot.rotation.z = -Math.PI / 2; balloon.add(knot);
+
+// ---------- labels in one row under the parts they name, fixed so the text never jiggles ----------
+// popularity is centred under the waist; exposure ends just left of it (under the left lobe) and duration starts
+// just right of it (under the right lobe). Run after the font loads: it measures the popularity label.
+function placeLabels() {
+  camera.updateMatrixWorld();
+  const GAP = 6, Y = 161, cx = ((new THREE.Vector3(XC, 0, 0).project(camera).x + 1) / 2) * W;
+  const pop = document.getElementById("t-pop"), half = pop.getComputedTextLength() / 2;
+  const set = (el, x, anchor) => { el.setAttribute("x", x.toFixed(1)); el.setAttribute("y", Y); el.setAttribute("text-anchor", anchor); };
+  set(pop, cx, "middle");
+  set(document.getElementById("t-exp"), cx - half - GAP, "end");
+  set(document.getElementById("t-dur"), cx + half + GAP, "start");
+}
+
+// ---------- per-frame update ----------
+function render(t) {
+  const { q, kL, kR, eL, eR } = stateAt(t), qc = Math.max(0, Math.min(1, q)), P = geo.attributes.position.array;
+  for (let i = 0; i < NU; i++) {
+    const u = -1 + (2 * i) / (NU - 1), { x, k, r } = ring(u, q, kL, kR, eL, eR), free = k * r0(u);
+    // compressed rubber next to the waist folds lengthwise
+    const c = Math.max(0, Math.min(1, 1 - r / Math.max(free, 1e-6)));
+    const fold = 0.1 * qc * ease((c - 0.04) / 0.3) * (1 - ease((Math.abs(x - XC) - 0.25) / 0.2));
+    const tall = 1 + 0.6 * Math.max(0, k - 1);   // cartoon squash and stretch: swelling ends grow taller than deep
+    for (let j = 0; j < NT; j++) {
+      const th = (2 * Math.PI * j) / NT;
+      const rr = r * (1 + fold * (0.6 * Math.sin(14 * th + 6 * x) + 0.4 * Math.sin(23 * th - 9 * x)));
+      P.set([x, rr * Math.sin(th) * tall, rr * Math.cos(th)], (i * NT + j) * 3);
+    }
+  }
+  geo.attributes.position.needsUpdate = true;
+  geo.computeVertexNormals();
+  knot.position.set(LH * eR - 0.004, 0, 0);
+  balloon.rotation.z = 1.4 * (kL - kR);          // the heavier (left) end dips; the out-of-step springs make it rock
+  renderer.render(scene, camera);
+  banner.dataset.rendered = String(t);
+}
+
+window.render = render;
+new MutationObserver(() => render(Number(banner.dataset.t))).observe(banner, { attributeFilter: ["data-t"] });
+const qs = new URLSearchParams(location.search).get("t");
+if (qs !== null) render(Number(qs));
+else { const t0 = performance.now(); const loop = (now) => { render(((now - t0) / 1000 / PERIOD) % 1); requestAnimationFrame(loop); }; requestAnimationFrame(loop); }
+await document.fonts.ready;
+placeLabels();
+banner.dataset.ready = "1";
+</script>
+</body>
+</html>
