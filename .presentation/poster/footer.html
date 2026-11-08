@@ -9,7 +9,10 @@
   #sp-garena { height: 64px; }
   #sp-sea { height: 117px; margin: -17px -10px; }
   #sp-tealseed { height: 150px; margin: -28px; }
-  .qr { width: 170px; height: 170px; border: 4px solid var(--ink); display: grid; place-items: center; text-align: center; font-size: 23px; line-height: 1.3; letter-spacing: .04em; }
+  .qr { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .qr img { display: block; width: 287px; height: 287px; }
+  .qr .vote { font-family: Fraunces; font-weight: 800; font-size: 44px; line-height: 1; white-space: nowrap; }
+  .qr .vote em { color: var(--pop); font-style: normal; }
 </style>
 
 <!-- image paths resolve against v3-poster.html, not this file -->
@@ -23,5 +26,5 @@
       <img id="sp-tealseed" src="assets/sponsor-tealseed.png" alt="Tealseed">
     </div>
   </div>
-  <div class="qr mono">QR<br>interactive<br>results</div>
+  <div class="qr"><img src="assets/qr-steps-vote.svg" alt="QR code: uvents.nus.edu.sg/event/29th-steps/vote"><div class="vote">Vote for CP4285-<em>6</em>!</div></div>
 </footer>

@@ -28,7 +28,7 @@
     });
     return s + "</svg>";
   };
-  const head = F.head_share_exposure, meanPop = F.n_train_rows / F.n_items;
+  const head = F.head_share_exposure;
   const cr = F.positive_rates, std = cr.train.click, rnd = cr.test.click;
   const v = F.median_dur_by_pop_quintile_s, w = 1210, h = 150, lo = 60, bw = w / v.length;
   let q = `<svg width="${w}" height="${h + 44}" viewBox="0 0 ${w} ${h + 44}">`;
@@ -41,15 +41,14 @@
   q += T(12, h + 36, "least popular fifth", { size: 26, fill: COL.sub }) + T(w - 12, h + 36, `most popular fifth · bars start at ${lo} s`, { size: 26, fill: COL.sub, anchor: "end" });
   q += "</svg>";
   const rows = [
-    ["Popularity", COL.pop, "who gets shown", bar([[head, COL.pop, `top 20% of videos get ${(100 * head).toFixed(0)}% of training exposures`], [1 - head, "#e5e7eb", "", COL.sub]]),
-      `Naive MF amplifies this: its top-10 videos average ${num(mean(naive, "arp@10"))} training exposures, against ${num(meanPop)} for the average video.`],
+    ["Popularity", COL.pop, "who gets shown", bar([[head, COL.pop, `top 20% of videos get ${(100 * head).toFixed(0)}% of training exposures`], [1 - head, "#e5e7eb", "", COL.sub]])],
     ["Exposure", COL.exp, "what gets clicked", bar([[std, COL.exp, `standard log: ${(100 * std).toFixed(0)}% clicked`]]) + bar([[rnd, "#7fb8b1", `random log: ${(100 * rnd).toFixed(0)}% clicked`, COL.ink, true]]),
-      `The logging policy shows what users already click, so logged feedback overstates relevance.`],
+      `In KuaiRand's single-column UI, "clicked" is defined as the user watched the video for more than 7s, or the whole video if it is 7s or shorter. In the two-column UI, it is a tap on the video.`],
     ["Duration", COL.dur, "popular = shorter", q,
       `The link is weak overall (Spearman ρ = ${signed(F.rho_pop_dur, 2)}) but sits at the head: the 200 most-shown videos have a median of ${F.median_dur_top200_s.toFixed(0)} s against ${F.median_dur_pool_s.toFixed(0)} s.`],
   ];
   document.getElementById("evidence").innerHTML = rows.map(([t, c, sub, chart, text]) =>
-    `<div class="ev"><div class="tag" style="color:${c}">${t}<small>${sub}</small></div><div>${chart}<p>${text}</p></div></div>`).join("") +
+    `<div class="ev"><div class="tag" style="color:${c}">${t}<small>${sub}</small></div><div>${chart}${text ? `<p>${text}</p>` : ""}</div></div>`).join("") +
     `<p class="note" style="margin-top:4px">Sanity check: the random log spreads exposures almost evenly over its item pool (coefficient of variation ${F.random_item_cv.toFixed(2)}), so it can serve as an unbiased test set.</p>`;
 }
 </script>
