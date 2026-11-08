@@ -2,9 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Fixing one bias, shifting another: A1 poster</title>
+<title>Squeeze the Balloon: When Debiasing Shifts Bias Elsewhere: A1 poster</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,800;1,9..144,400;1,9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<!--
+  Merger for the A1 poster. Each section lives in poster/*.html (its markup, its CSS, its chart script);
+  this file holds the shared tokens, helpers and layout, and splices the parts in at each data-part slot.
+  Parts are fetched, so serve this folder over HTTP:  python -m http.server -d .presentation  → /v3-poster.html
+-->
 <style>
   @page { size: 841mm 1189mm; margin: 0; }
   :root {
@@ -17,156 +24,45 @@
     color: var(--ink); font-family: Inter, sans-serif; font-size: 46px; line-height: 1.4;
     display: flex; flex-direction: column; gap: 30px; background: var(--paper); }
   .mono { font-family: "IBM Plex Mono", monospace; letter-spacing: .08em; text-transform: uppercase; }
-  .mast { display: flex; justify-content: space-between; align-items: center; border-top: 10px solid var(--rule);
-    border-bottom: 3px solid var(--rule); padding: 22px 0; font-size: 36px; }
-  .mast .team { font-family: Fraunces; font-weight: 800; font-size: 72px; letter-spacing: 0; text-transform: none; line-height: 1; }
-  .mast .team em { color: var(--pop); font-style: normal; }
-  h1 { font-family: Fraunces; font-weight: 800; font-size: 168px; line-height: .95; letter-spacing: -5px; white-space: nowrap; }
-  h1 em { font-style: italic; font-weight: 600; color: var(--pop); }
-  .dek { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 60px; margin-top: 30px; }
-  .dek p { font-family: Fraunces; font-style: italic; font-size: 58px; line-height: 1.1; color: var(--sub); }
-  .dek .members { text-align: right; font-size: 40px; color: var(--sub); }
-  .dek .members b { color: var(--ink); }
-  .lede { display: grid; grid-template-columns: 1.3fr 1fr; gap: 100px; align-items: center; padding-top: 36px; border-top: 3px solid var(--rule); }
-  .lede p.body { font-size: 45px; line-height: 1.4; }
-  .lede p.body::first-letter { font-family: Fraunces; font-weight: 800; float: left; font-size: 214px; line-height: .8; padding: 16px 24px 0 0; color: var(--pop); }
-  .quote { border-left: 14px solid var(--pop); padding: 6px 0 6px 56px; }
-  .quote .q { font-family: Fraunces; font-weight: 600; font-size: 80px; line-height: 1.02; letter-spacing: -2px; }
-  .quote .by { margin-top: 28px; font-size: 34px; color: var(--sub); }
   h2 { font-family: Fraunces; font-weight: 800; font-size: 88px; letter-spacing: -2px; line-height: 1; white-space: nowrap; }
-  h2 .rq { font-family: "IBM Plex Mono"; font-weight: 600; font-size: 36px; letter-spacing: .08em; color: var(--pop); vertical-align: middle; margin-left: 24px; }
   .sec-head { display: flex; justify-content: space-between; align-items: baseline; gap: 40px; border-top: 3px solid var(--rule); padding-top: 28px; margin-bottom: 20px; }
   .sec-head .mono { font-size: 31px; color: var(--sub); text-align: right; }
   .note { font-size: 29px; color: var(--sub); line-height: 1.4; }
-  .rq3 { display: grid; grid-template-columns: 1500px 1fr; gap: 90px; align-items: center; }
-  .rq3 p { font-size: 40px; line-height: 1.38; margin-bottom: 22px; }
-  .rq3 p:last-child { margin-bottom: 0; }
-  .cap b { font-weight: 700; }
-  .bottom h4 { font-family: "IBM Plex Mono"; font-size: 36px; letter-spacing: .1em; text-transform: uppercase; color: var(--pop); margin-bottom: 14px; }
-  .bottom { border-top: 3px solid var(--rule); padding-top: 30px; }
+  /* data analysis | methodology, side by side */
   .dm { display: grid; grid-template-columns: 1.1fr 1fr; gap: 90px; align-items: start; }
   .dm .sec-head { margin-bottom: 14px; }
-  .dm .sec-head .mono { font-size: 28px; white-space: nowrap; }
+  .dm .sec-head .mono { font-size: 28px; }
   .dm p, .dm li, .dm td { font-size: 31px; line-height: 1.34; }
-  .ev { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: start; padding: 16px 0; border-top: 2px solid var(--soft); }
-  .ev:first-child { border-top: none; padding-top: 4px; }
-  .ev .tag { font-family: Fraunces; font-weight: 800; font-size: 44px; line-height: 1; padding-top: 6px; }
-  .ev .tag small { display: block; font-family: Inter; font-weight: 400; font-size: 27px; color: var(--sub); margin-top: 8px; line-height: 1.25; }
-  .ev p { margin-top: 4px; }
-  .rqs { list-style: none; padding: 0; margin-bottom: 18px; }
-  .rqs li { display: grid; grid-template-columns: 100px 1fr; }
-  .rqs li b { font-family: "IBM Plex Mono"; color: var(--pop); }
-  .flow { display: grid; grid-template-columns: 1fr 40px 1fr 40px 1fr 40px 1fr; margin-bottom: 20px; }
-  .flow .box { background: #f6f7f9; border-radius: 6px; padding: 14px 18px; font-size: 27px; line-height: 1.28; }
-  .flow .box b { display: block; font-size: 32px; margin-bottom: 4px; }
-  .flow .box.test { background: #e6f2f0; }
-  .flow .arrow { align-self: center; text-align: center; font-size: 44px; color: var(--sub); }
-  table.meth { width: 100%; border-collapse: collapse; }
-  table.meth th { text-align: left; font-family: "IBM Plex Mono"; font-weight: 600; font-size: 25px; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); border-bottom: 3px solid var(--ink); padding: 0 18px 10px 0; }
-  table.meth td { border-bottom: 2px solid var(--soft); padding: 10px 18px 10px 0; vertical-align: top; }
-  table.meth td:first-child { font-family: Fraunces; font-weight: 800; font-size: 36px; white-space: nowrap; line-height: 1.1; }
-  table.meth td:first-child small { display: block; font-family: Inter; font-weight: 400; font-size: 26px; color: var(--sub); margin-top: 4px; }
-  table.meth tr.base td { color: var(--sub); }
-  .bottom p, .bottom li { font-size: 37px; line-height: 1.36; }
-  .bottom ol { padding-left: 0; list-style: none; counter-reset: k; display: grid; grid-template-columns: repeat(4, 1fr); gap: 56px; }
+  /* takeaways | limitations, side by side */
+  .bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 90px; align-items: start; border-top: 3px solid var(--rule); padding-top: 30px; }
+  .bottom h4 { font-family: "IBM Plex Mono"; font-size: 36px; letter-spacing: .1em; text-transform: uppercase; color: var(--pop); margin-bottom: 14px; }
+  .bottom li { font-size: 37px; line-height: 1.36; }
+  .bottom ol { padding-left: 0; list-style: none; counter-reset: k; display: grid; gap: 22px; }
   .bottom ol li { counter-increment: k; display: grid; grid-template-columns: 66px 1fr; }
   .bottom ol li::before { content: counter(k); font-family: Fraunces; font-weight: 800; font-size: 70px; line-height: .9; color: var(--pop); }
-  .panel p { margin-bottom: 10px; }
-  .panel .k { font-weight: 700; }
-  .limits { margin-top: 18px; font-size: 31px !important; line-height: 1.4 !important; color: var(--sub); }
-  .limits b { color: var(--ink); }
-  footer { margin-top: auto; display: grid; grid-template-columns: 1fr auto; gap: 70px; align-items: center; border-top: 10px solid var(--rule); padding-top: 30px; }
-  .refs { font-size: 28px; color: var(--sub); line-height: 1.5; }
-  .sponsors { display: flex; align-items: center; gap: 80px; margin-top: 26px; }
-  .sponsors .mono { font-size: 25px; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); }
-  .sponsors img { display: block; }
-  /* heights equalise the visible marks; negative margins cancel the transparent padding baked into two of the files */
-  #sp-dsta { height: 84px; }
-  #sp-garena { height: 64px; }
-  #sp-sea { height: 117px; margin: -17px -10px; }
-  #sp-tealseed { height: 150px; margin: -28px; }
-  .qr { width: 170px; height: 170px; border: 4px solid var(--ink); display: grid; place-items: center; text-align: center; font-size: 23px; line-height: 1.3; letter-spacing: .04em; }
   svg text { font-family: Inter, sans-serif; }
+  .part-error { color: var(--pop); font-family: "IBM Plex Mono", monospace; font-size: 40px; white-space: pre-wrap; }
 </style>
 </head>
 <body>
 <div class="poster">
-  <div class="mast mono"><span class="team">Team <em>XX</em></span><span>CS4285 · Modern Recommendation Systems</span><span>29th STePS · 11 November 2026</span></div>
-
-  <div>
-    <h1>Fixing one bias, <em>shifting another</em></h1>
-    <div class="dek"><p>What single-bias debiasing does to the biases it doesn’t target</p>
-      <div class="members"><b>A · B · C · D · E · F</b><br>National University of Singapore</div></div>
-  </div>
-
-  <section class="lede">
-    <p class="body">Recommenders learn from <b>what users were shown</b>, not from what they would have liked. Debiasing methods fix this <b>one bias at a time</b> and are judged on accuracy alone [2]. We measured <b>every</b> bias on randomly exposed videos [1] and asked: <i>when a method removes its bias, where does the bias go?</i></p>
-    <div class="quote">
-      <div class="q" id="quote"></div>
-      <div class="by mono" id="quote-by"></div>
-    </div>
-  </section>
-
+  <div data-part="poster/masthead.html"></div>
+  <div data-part="poster/lede.html"></div>
   <section class="dm">
-    <div>
-      <div class="sec-head"><h2>Data analysis</h2><span class="mono" id="data-head"></span></div>
-      <div id="evidence"></div>
-    </div>
-    <div>
-      <div class="sec-head"><h2>Methodology</h2><span class="mono">one backbone · one budget · one test</span></div>
-      <ul class="rqs">
-        <li><b>RQ1</b><span>Does a method reduce the bias it targets?</span></li>
-        <li><b>RQ2</b><span>What does it do to the biases it does not target?</span></li>
-        <li><b>RQ3</b><span>Are popularity and duration coupled, so fixing one moves the other?</span></li>
-      </ul>
-      <div class="flow" id="flow"></div>
-      <table class="meth">
-        <thead><tr><th>Method</th><th>How it corrects</th><th>Knob (swept)</th></tr></thead>
-        <tbody>
-          <tr><td style="color:var(--pop)">MACR [3]<small>popularity</small></td><td>Learns an item-only branch and subtracts its effect when ranking</td><td>c: 7 values, 0–100</td></tr>
-          <tr><td style="color:var(--exp)">IPS-feat [4]<small>exposure</small></td><td>Weights each logged interaction by 1 / P(shown); P from an FM over user and video features</td><td>clip: 9 values, 10–∞</td></tr>
-          <tr><td style="color:var(--dur)">D2Q [5]<small>duration</small></td><td>Trains on the watch-time quantile among videos of similar length, then ranks by the watch time that quantile implies</td><td>M groups: 6 values, 1–100</td></tr>
-          <tr class="base"><td>Baselines</td><td>Naive MF on clicks (vs MACR, IPS-feat) · VR, MF on raw watch time (vs D2Q)</td><td>—</td></tr>
-        </tbody>
-      </table>
-    </div>
+    <div data-part="poster/data.html"></div>
+    <div data-part="poster/methodology.html"></div>
   </section>
-
-  <section>
-    <div class="sec-head"><h2>Where each fix moves the bias<span class="rq">RQ1 · RQ2</span></h2><span class="mono">% change vs. baseline · right = better · outlined = own target</span></div>
-    <div id="audit"></div>
-    <div class="note" id="audit-note"></div>
-  </section>
-
-  <section>
-    <div class="sec-head"><h2>Does fixing one bias move another?<span class="rq">RQ3</span></h2><span class="mono">length mix of top-10 lists · same settings as above</span></div>
-    <div class="rq3">
-      <div id="lengths"></div>
-      <div id="lengths-text"></div>
-    </div>
-  </section>
-
+  <div data-part="poster/audit.html"></div>
+  <div data-part="poster/rq3.html"></div>
   <section class="bottom">
-    <h4>Takeaways</h4>
-    <ol id="takeaways"></ol>
-    <p class="limits"><b>Limits.</b> One dataset, one backbone. The tuned learning rate changes for some knob values. Lower ARP is not always better. Per-user JSD has a floor: users click only a few random videos each. No multiple-comparison correction.</p>
+    <div data-part="poster/takeaways.html"></div>
+    <div data-part="poster/limitations.html"></div>
   </section>
-
-  <footer>
-    <div>
-      <div class="refs">[1] Gao et al., KuaiRand, CIKM ’22 · [2] Chen et al., Bias and Debias in Recommender System: A Survey, TOIS ’23 · [3] Wei et al., MACR, KDD ’21 · [4] Schnabel et al., Recommendations as Treatments (IPS), ICML ’16 · [5] Zhan et al., Deconfounding Duration Bias in Watch-time Prediction (D2Q), KDD ’22 · [6] Abdollahpouri et al., User-centered Evaluation of Popularity Bias, UMAP ’21. VR: MF regressing raw watch time, D2Q’s baseline [5].</div>
-      <div class="sponsors"><span class="mono">Sponsors</span>
-        <img id="sp-sea" src="assets/sponsor-sea-group.png" alt="Sea">
-        <img id="sp-garena" src="assets/sponsor-garena.png" alt="Garena">
-        <img id="sp-dsta" src="assets/sponsor-dsta.png" alt="DSTA">
-        <img id="sp-tealseed" src="assets/sponsor-tealseed.png" alt="Tealseed">
-      </div>
-    </div>
-    <div class="qr mono">QR<br>interactive<br>results</div>
-  </footer>
+  <div data-part="poster/footer.html"></div>
 </div>
 <script src="assets/data.js"></script>
 <script>
+// ---- shared by every part's script ----
 // D2Q-Q (our quantile-ranking variant of D2Q) is not on the poster.
 const R = window.RESULTS, S = R.sweeps.filter((r) => r.method !== "d2q_q"), F = R.facts;
 const css = getComputedStyle(document.documentElement), C = (k) => css.getPropertyValue("--" + k).trim();
@@ -177,8 +73,8 @@ const mean = (r, key) => r.metrics[key].mean;
 const pct = (r, b, key) => (100 * (mean(r, key) - mean(b, key))) / mean(b, key);
 const sig = (r, key) => r.metrics[key].sig;
 const signed = (v, d = 0) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d);
+const pc = (v) => signed(v, Math.abs(v) < 9.95 ? 1 : 0) + "%";
 const num = (v, d = 0) => v.toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
-const knobText = (k) => (k === "inf" ? "∞" : String(k));
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
 const T = (x, y, s, o = {}) =>
   `<text x="${x}" y="${y}" font-size="${o.size || 32}" fill="${o.fill || COL.ink}" text-anchor="${o.anchor || "start"}" font-weight="${o.weight || 400}"${o.family ? ` style="font-family:${o.family}"` : ""}>${esc(s)}</text>`;
@@ -203,170 +99,32 @@ const cell = (row, col) => {
   return { key, p, imp: col.better * p, sig: sig(row.r, key), from: mean(row.base, key), to: mean(row.r, key) };
 };
 
-// ---- audit matrix: one SVG, methods × biases, common % scale ----
-(function audit() {
-  const W = 2878, labelW = 290, headH = 118, rowH = 106, footH = 44, H = headH + ROWS.length * rowH + footH;
-  const colW = (W - labelW) / COLS.length, pad = 22, txt = 140;
-  const cells = ROWS.map((row) => COLS.map((col) => cell(row, col)));
-  const max = Math.max(...cells.flat().map((c) => Math.abs(c.imp)));
-  let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
-  COLS.forEach((col, j) => {
-    const x = labelW + j * colW, cx = x + colW / 2, half = colW / 2 - pad - txt;
-    const color = COL[col.key];
-    if (j) s += `<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="${COL.soft}" stroke-width="3"/>`;
-    s += T(x + pad, 58, col.title, { size: 64, weight: 800, fill: color, family: "Fraunces" });
-    s += T(x + pad, 102, col.sub, { size: 30, fill: COL.sub });
-    s += `<line x1="${cx}" y1="${headH - 10}" x2="${cx}" y2="${headH + ROWS.length * rowH}" stroke="${COL.ink}" stroke-width="3"/>`;
-    s += T(cx - 14, H - 14, "← worse", { size: 26, fill: COL.sub, anchor: "end", family: "IBM Plex Mono" });
-    s += T(cx + 14, H - 14, "better →", { size: 26, fill: COL.sub, family: "IBM Plex Mono" });
-    ROWS.forEach((row, i) => {
-      const c = cells[i][j], y = headH + i * rowH, bh = 50, by = y + 14;
-      const len = (Math.abs(c.imp) / max) * half, good = c.imp > 0;
-      const bx = good ? cx : cx - len;
-      if (row.target === col.key) s += `<rect x="${x + 10}" y="${y + 4}" width="${colW - 20}" height="${rowH - 8}" rx="10" fill="none" stroke="${color}" stroke-width="6"/>`;
-      s += `<rect x="${bx}" y="${by}" width="${Math.max(len, 3)}" height="${bh}" fill="${color}" opacity="${good ? 1 : 0.3}"/>`;
-      const tx = good ? cx + len + 14 : cx - len - 14, anchor = good ? "start" : "end";
-      s += T(tx, by + 40, signed(c.p, Math.abs(c.p) < 9.95 ? 1 : 0) + "%" + (c.sig ? "" : " ns"), { size: 44, weight: 700, anchor, fill: c.sig ? COL.ink : COL.sub });
-      s += T(good ? cx - 14 : cx + 14, by + bh + 32, `${col.raw(c.from)} → ${col.raw(c.to)}`, { size: 28, fill: COL.sub, anchor: good ? "end" : "start" });
-    });
-  });
-  ROWS.forEach((row, i) => {
-    const y = headH + i * rowH;
-    s += T(0, y + 54, row.name, { size: 58, weight: 800, family: "Fraunces" });
-    s += T(0, y + 92, row.set, { size: 30, fill: COL.sub });
-  });
-  document.getElementById("audit").innerHTML = s + "</svg>";
-  document.getElementById("audit-note").innerHTML =
-    `Solid = better (accuracy up or bias down); pale = worse; grey = baseline → method. XGAUC: share of each user’s video pairs that the model ranks in watch-time order, weighted by the user’s number of candidates. Duration: per user, Jensen–Shannon divergence between the length mix of the top-10 and of the videos the user clicked on random exposure, over five equal-count length bins; 0 = same mix, 1 = disjoint [6]. MACR and IPS-feat vs Naive MF (clicks); D2Q vs VR (raw watch time, a label that itself favours long videos). One mid-grid setting per method. All changes significant (paired 95% bootstrap over test users) unless marked ns.`;
-})();
-
-const ARP = (r) => mean(r, "arp@10");
-const range = (vs) => [Math.min(...vs), Math.max(...vs)];
-
-// ---- data analysis: bias evidence in the logs ----
-{
-  const bar = (parts, w = 1210, h = 54) => {
-    let x = 0, s = `<svg width="${w}" height="${h + 8}" viewBox="0 0 ${w} ${h + 8}">`;
-    parts.forEach(([v, color, label, fill = "#fff", outside = false]) => {
-      const bw = v * w;
-      s += `<rect x="${x}" y="4" width="${bw}" height="${h}" fill="${color}"/>`;
-      if (label) s += T(x + (outside ? bw : 0) + 16, 4 + h / 2 + 10, label, { size: 28, weight: 700, fill });
-      x += bw;
-    });
-    return s + "</svg>";
-  };
-  const head = F.head_share_exposure, meanPop = F.n_train_rows / F.n_items;
-  const cr = F.positive_rates, std = cr.train.click, rnd = cr.test.click;
-  const v = F.median_dur_by_pop_quintile_s, w = 1210, h = 150, lo = 60, bw = w / v.length;
-  let q = `<svg width="${w}" height="${h + 44}" viewBox="0 0 ${w} ${h + 44}">`;
-  v.forEach((d, i) => {
-    const bh = ((d - lo) / (Math.max(...v) - lo)) * (h - 44), x = i * bw + 12, y = h - bh;
-    q += `<rect x="${x}" y="${y}" width="${bw - 24}" height="${bh}" fill="${i === v.length - 1 ? COL.dur : "#c9ccd2"}"/>`;
-    q += T(x + (bw - 24) / 2, y - 10, d.toFixed(0) + " s", { size: 28, weight: 700, anchor: "middle" });
-  });
-  q += `<line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="${COL.ink}" stroke-width="3"/>`;
-  q += T(12, h + 36, "least popular fifth", { size: 26, fill: COL.sub }) + T(w - 12, h + 36, `most popular fifth · bars start at ${lo} s`, { size: 26, fill: COL.sub, anchor: "end" });
-  q += "</svg>";
-  const rows = [
-    ["Popularity", COL.pop, "who gets shown", bar([[head, COL.pop, `top 20% of videos get ${(100 * head).toFixed(0)}% of training exposures`], [1 - head, "#e5e7eb", "", COL.sub]]),
-      `Naive MF amplifies this: its top-10 videos average ${num(ARP(naive))} training exposures, against ${num(meanPop)} for the average video.`],
-    ["Exposure", COL.exp, "what gets clicked", bar([[std, COL.exp, `standard log: ${(100 * std).toFixed(0)}% clicked`]]) + bar([[rnd, "#7fb8b1", `random log: ${(100 * rnd).toFixed(0)}% clicked`, COL.ink, true]]),
-      `The logging policy shows what users already click, so logged feedback overstates relevance.`],
-    ["Duration", COL.dur, "popular = shorter", q,
-      `The link is weak overall (Spearman ρ = ${signed(F.rho_pop_dur, 2)}) but sits at the head: the 200 most-shown videos have a median of ${F.median_dur_top200_s.toFixed(0)} s against ${F.median_dur_pool_s.toFixed(0)} s (RQ3).`],
-  ];
-  document.getElementById("evidence").innerHTML = rows.map(([t, c, sub, chart, text]) =>
-    `<div class="ev"><div class="tag" style="color:${c}">${t}<small>${sub}</small></div><div>${chart}<p>${text}</p></div></div>`).join("") +
-    `<p class="note" style="margin-top:4px">Sanity check: the random log spreads exposures almost evenly over its item pool (coefficient of variation ${F.random_item_cv.toFixed(2)}), so it can serve as an unbiased test set.</p>`;
-}
-
-// ---- methodology: pipeline ----
-{
-  const k = (n) => num(n);
-  const boxes = [
-    ["Train", `Standard log, 8–21 Apr: ${(F.n_train_rows / 1e6).toFixed(2)}M exposures chosen by the platform’s policy`],
-    ["Model", "One 64-d MF backbone + one correction; one knob value = one sweep"],
-    ["Tune", `Random log, 30% of users (${k(F.users.calibration)}): 9-point lr × weight-decay grid`],
-    ["Test", `Random log, 70% of users (${k(F.users.test)}): best point, 5 seeds, scored once`],
-  ];
-  document.getElementById("flow").innerHTML = boxes.map(([b, t], i) =>
-    (i ? `<div class="arrow">→</div>` : "") + `<div class="box${i === 3 ? " test" : ""}"><b>${b}</b>${t}</div>`).join("");
-}
-
-// ---- RQ3: length mix of the top-10 lists vs clicked videos on random exposure, with the per-user JSD ----
-{
-  const SH = (r, side) => [0, 1, 2, 3, 4].map((j) => mean(r, `dur_bin_share@10[click].${side}_${j}`));
-  const JSD = (r) => mean(r, "jsd_dur@10[click]");
-  const SHADE = ["#f7e9c6", "#ebc56f", "#c98200", "#8c5b00", "#4a3000"], INK = [COL.ink, COL.ink, "#fff", "#fff", "#fff"];
-  const items = [
-    ["Clicked", SH(naive, "ref"), COL.sub, null],
-    ["Naive MF", SH(naive, "list"), COL.ink, naive], ["MACR", SH(ROWS[0].r, "list"), COL.pop, ROWS[0].r], ["IPS-feat", SH(ROWS[1].r, "list"), COL.exp, ROWS[1].r],
-    ["VR", SH(vr, "list"), COL.ink, vr], ["D2Q", SH(ROWS[2].r, "list"), COL.dur, ROWS[2].r],
-  ];
-  const w = 1500, rowH = 64, top = 56, labelW = 230, jsdW = 150, bh = 48, x0 = labelW, x1 = w - jsdW, legY = top + items.length * rowH + 28;
-  const h = legY + 60;
-  let s = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`;
-  s += T(x0, top - 22, "share of top-10 slots by video length", { size: 30, fill: COL.sub });
-  s += T(w, top - 22, "JSD", { size: 30, fill: COL.sub, anchor: "end", family: "IBM Plex Mono" });
-  items.forEach(([l, sh, c, r], i) => {
-    const y = top + i * rowH + (rowH - bh) / 2;
-    s += T(0, y + bh / 2 + 13, l, { size: 40, fill: c, weight: 800, family: "Fraunces" });
-    let x = x0;
-    sh.forEach((v, j) => {
-      const bw = v * (x1 - x0 - 20);
-      s += `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="${SHADE[j]}"/>`;
-      if (v >= 0.07) s += T(x + bw / 2, y + bh / 2 + 11, (100 * v).toFixed(0) + "%", { size: 30, weight: 700, anchor: "middle", fill: INK[j] });
-      x += bw;
-    });
-    s += r ? T(w, y + bh / 2 + 13, JSD(r).toFixed(3), { size: 38, weight: 700, anchor: "end" }) : T(w, y + bh / 2 + 13, "target", { size: 30, fill: COL.sub, anchor: "end" });
-    if (i === 0) s += `<line x1="0" y1="${top + rowH - 2}" x2="${w}" y2="${top + rowH - 2}" stroke="${COL.soft}" stroke-width="3"/>`;
-  });
-  const lw = (x1 - x0) / 5;
-  F.dur_bin_range_s.forEach(([lo, hi], j) => {
-    const x = x0 + j * lw;
-    s += `<rect x="${x}" y="${legY}" width="34" height="34" fill="${SHADE[j]}"/>`;
-    s += T(x + 46, legY + 28, j === 4 ? `${lo.toFixed(0)} s +` : `${lo.toFixed(0)}–${hi.toFixed(0)} s`, { size: 30, fill: COL.sub });
-  });
-  document.getElementById("lengths").innerHTML = s + "</svg>";
-  const pc = (v) => signed(v, Math.abs(v) < 9.95 ? 1 : 0) + "%";
-  const share = (r, js) => 100 * js.reduce((a, j) => a + mean(r, `dur_bin_share@10[click].list_${j}`), 0);
-  const edge = (j) => F.dur_bin_range_s[j][0].toFixed(0), upto = (j) => F.dur_bin_range_s[j][1].toFixed(0);
-  const ref = [0, 1, 2, 3, 4].map((j) => 100 * mean(naive, `dur_bin_share@10[click].ref_${j}`));
-  const d2q = ROWS[2].r, dj = (i) => pc(pct(ROWS[i].r, ROWS[i].base, "jsd_dur@10[click]"));
-  document.getElementById("lengths-text").innerHTML = [
-    `<b>Fixing duration moves popularity.</b> D2Q takes VR’s lists off long videos (${share(vr, [3, 4]).toFixed(0)}% → ${share(d2q, [3, 4]).toFixed(0)}% of slots ≥ ${edge(3)} s) into ${edge(1)}–${upto(2)} s (${share(d2q, [1, 2]).toFixed(0)}%), past the near-even clicked mix (${Math.min(...ref).toFixed(0)}–${Math.max(...ref).toFixed(0)}% per fifth; JSD ${dj(2)}). Its ARP falls by ${Math.abs(pct(d2q, vr, "arp@10")).toFixed(0)}%.`,
-    `<b>Fixing popularity moves duration only sometimes.</b> MACR piles into ${edge(2)}–${upto(2)} s (${share(naive, [2]).toFixed(0)}% → ${share(ROWS[0].r, [2]).toFixed(0)}%, JSD ${dj(0)}). IPS-feat shifts to longer videos (≥ ${edge(3)} s: ${share(naive, [3, 4]).toFixed(0)}% → ${share(ROWS[1].r, [3, 4]).toFixed(0)}%, JSD ${dj(1)}), likely because its propensity model uses duration. <b>The shift follows what a correction conditions on, not popularity alone.</b>`,
-  ].map((t) => `<p>${t}</p>`).join("");
-}
-
-// ---- setup stats, quote byline, takeaways ----
-{
-  const k = (v) => (v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : (v / 1e3).toFixed(1) + "K");
-  const seeds = naive.metrics["arp@10"].seeds.length, randRows = F.rows.calibration + F.rows.test;
-  document.getElementById("data-head").textContent =
-    `KuaiRand-Pure · ${k(F.users.train)} users · ${k(F.n_items)} videos`;
-  document.getElementById("quote-by").textContent =
-    `3 methods · ${S.length} settings · ${S.length * seeds} models · ${num(F.users.test)} test users`;
-
-  const c = (i, key) => cell(ROWS[i], COLS.find((x) => x.key === key));
-  const pc = (v) => signed(v, Math.abs(v) < 9.95 ? 1 : 0) + "%";
-  const worse = (i, key) => c(i, key).sig && c(i, key).imp < 0;
-  const off = ROWS.filter((row, i) => ["pop", "exp", "dur"].some((b) => b !== row.target && worse(i, b))).length;
-  const own = ROWS.filter((row, i) => worse(i, row.target)).length;
-  const W = ["No", "One", "Two", "Three"];
-  document.getElementById("quote").textContent = off === ROWS.length
-    ? "“Every fix made another bias worse.”"
-    : `“${W[off]} of three fixes made another bias worse${own ? `; ${W[own].toLowerCase()} made its own worse` : ""}.”`;
-  const accMax = (j) => Math.max(...ROWS.map((row) => Math.abs(cell(row, COLS[j]).p)));
-  const biasMax = Math.max(...ROWS.flatMap((_, i) => ["pop", "exp", "dur"].map((b) => Math.abs(c(i, b).p))));
-  const g = range(S.map((r) => mean(r, "gini@10")));
-  document.getElementById("takeaways").innerHTML = [
-    `<b>Targets move, one the wrong way.</b> MACR popularity ${pc(c(0, "pop").p)}, IPS-feat coverage ${pc(c(1, "exp").p)}, D2Q duration JSD ${pc(c(2, "dur").p)}.`,
-    `<b>Bias moves.</b> MACR coverage ${pc(c(0, "exp").p)} and duration ${pc(c(0, "dur").p)}, D2Q coverage ${pc(c(2, "exp").p)}; IPS-feat improves both others.`,
-    `<b>Accuracy is blind.</b> NDCG@10 moves by at most ${accMax(0).toFixed(1)}% and XGAUC by ${accMax(1).toFixed(1)}%, while bias metrics move by up to ${biasMax.toFixed(0)}%.`,
-    `<b>Report a profile.</b> Use metrics that can move: Gini@10 stays at ${g[0].toFixed(3)}–${g[1].toFixed(3)} everywhere and hides all of this; coverage does not.`,
-  ].map((t) => `<li><span>${t}</span></li>`).join("");
-}
+// ---- splice the parts in: all markup first, then each part's scripts in document order ----
+(async () => {
+  const slots = [...document.querySelectorAll("[data-part]")];
+  const parts = await Promise.all(slots.map(async (slot) => {
+    const path = slot.dataset.part, res = await fetch(path, { cache: "no-store" });
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    const t = document.createElement("template");
+    t.innerHTML = await res.text();
+    return { slot, path, frag: t.content };
+  }));
+  const scripts = [];
+  for (const { slot, path, frag } of parts) {
+    frag.querySelectorAll("script").forEach((s) => { scripts.push({ path, code: s.textContent }); s.remove(); });
+    slot.replaceWith(frag);
+  }
+  for (const { path, code } of scripts) {
+    const s = document.createElement("script");
+    s.textContent = `${code}\n//# sourceURL=${path}`;
+    document.body.append(s);
+  }
+  // LaTeX: any part may write <span class="tex">…</span>, also from its script; errors render in red in place
+  document.querySelectorAll(".tex").forEach((el) => katex.render(el.textContent, el, { throwOnError: false }));
+})().catch((err) => {
+  document.querySelector(".poster").innerHTML = `<p class="part-error">Could not load poster parts: ${esc(err.message)}\n\n` +
+    `Parts are fetched, so open this file over HTTP, not file://:\n  python -m http.server -d .presentation\n  → http://localhost:8000/v3-poster.html</p>`;
+});
 </script>
 </body>
 </html>
