@@ -8,25 +8,9 @@
 </div>
 
 <script>
-// ---- limitations: how far the one-setting-per-method audit generalises across each knob grid ----
-{
-  const sweep = (i) => S.filter((r) => r.method === ROWS[i].m).map((r) => ({ r, knob: r.knob, c: (key) => cell({ ...ROWS[i], r }, COLS.find((x) => x.key === key)) }));
-  const from10 = (i) => sweep(i).filter((s) => Number(s.knob) >= 10);   // MACR c = 0 and D2Q M = 1 apply no correction
-  const span = (vs) => { const s = [...vs].sort((x, y) => Math.abs(x) - Math.abs(y)); return `${pc(s[0])} to ${pc(s[s.length - 1])}`; };
-  const knob = (k) => (k === "inf" ? "∞" : String(k));
-
-  // D2Q: its own target (duration JSD) worsens only at the setting shown, which also tuned to a different learning rate
-  const d2q = from10(2), shown = d2q.find((s) => String(s.knob) === String(ROWS[2].k));
-  const lrSide = d2q.every((s) => s === shown || s.r.lr > shown.r.lr) ? "lower" : "different";
-
-  // IPS-feat: smallest clip from which both other biases improve significantly at every larger clip
-  const ips = sweep(1), good = (s) => ["pop", "dur"].every((b) => s.c(b).sig && s.c(b).imp > 0);
-  const from = ips.findIndex((_, j) => ips.slice(j).every(good));
-
-  document.getElementById("limitations").innerHTML = [
-    `<b>D2Q’s own-target loss is fragile.</b> JSD rises only at M = ${ROWS[2].k}, the one M ≥ 10 tuned to a ${lrSide} learning rate; at other M it falls or holds.`,
-    `<b>One setting per method.</b> MACR’s coverage loss (${span(from10(0).map((s) => s.c("exp").p))}) and D2Q’s (${span(from10(2).map((s) => s.c("exp").p))}) hold at every c, M ≥ 10, but IPS-feat improves both other biases only at clip ≥ ${knob(ips[from].knob)}.`,
-    `<b>Narrow scope.</b> One dataset, one MF backbone, one method per bias: effects may belong to the method or our implementation (our MACR keeps the per-video bias term), not to the bias.`,
-  ].map((t) => `<li><span>${t}</span></li>`).join("");
-}
+// ---- limitations ----
+document.getElementById("limitations").innerHTML = [
+  `<b>The biases overlap, and we do not separate them.</b> Each bias is scored with its own metric, but they are linked: popularity and exposure both come from how often a video is shown, and popular videos are shorter (see Data analysis).`,
+  `<b>Narrow scope.</b> One dataset, one MF backbone, one method per bias, one setting per method: effects may belong to the method, its setting or our implementation, not to the bias.`,
+].map((t) => `<li><span>${t}</span></li>`).join("");
 </script>

@@ -49,6 +49,6 @@
   ];
   document.getElementById("evidence").innerHTML = rows.map(([t, c, sub, chart, text]) =>
     `<div class="ev"><div class="tag" style="color:${c}">${t}<small>${sub}</small></div><div>${chart}${text ? `<p>${text}</p>` : ""}</div></div>`).join("") +
-    `<p class="note" style="margin-top:4px">Sanity check: the random log spreads exposures almost evenly over its item pool (coefficient of variation ${F.random_item_cv.toFixed(2)}), so it can serve as an unbiased test set.</p>`;
+    `<p class="note" style="margin-top:4px">Note: the random log spreads exposures almost evenly over its item pool (coefficient of variation ${F.random_item_cv.toFixed(2)}), so it can serve as an unbiased test set.</p>`;
 }
 </script>

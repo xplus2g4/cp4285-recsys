@@ -25,7 +25,7 @@
         <div class="eq"><span class="tex">\mathcal L=\textstyle\sum w_{ui}\,\mathrm{BCE}(f_{ui},y_{ui}),\ \ w_{ui}\propto\min\big(1/\hat P_{ui},\,\mathrm{clip}/\max\hat P\big),\quad s_{ui}=f_{ui}</span></div></td></tr>
       <tr><td style="color:var(--dur)">D2Q [5]<small>duration</small></td><td>Trains on the watch-time quantile <span class="tex">\hat\Phi_{k(i)}</span> within the video’s length group (one of M); ranks by the watch time it implies
         <div class="eq"><span class="tex">\mathcal L=\textstyle\sum\mathrm{BCE}\big(\sigma(f_{ui}),\,\hat\Phi_{k(i)}(w_{ui})\big),\quad s_{ui}=\hat\Phi^{-1}_{k(i)}\big(\sigma(f_{ui})\big)</span></div></td></tr>
-      <tr class="base"><td>Baselines</td><td>Naive MF on clicks (vs MACR, IPS-feat) · VR on raw watch time (vs D2Q)</td></tr>
+      <tr class="base"><td>Baselines</td><td>Naive MF on clicks (vs MACR, IPS-feat) · VR, the same MF regressed on raw watch time as in [5] (vs D2Q)</td></tr>
     </tbody>
   </table>
 </div>
