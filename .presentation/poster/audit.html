@@ -38,7 +38,13 @@
     s += T(0, y + 92, row.set, { size: 30, fill: COL.sub });
   });
   document.getElementById("audit").innerHTML = s + "</svg>";
+  const knob = (k) => (k === "inf" ? "∞" : String(k));
+  const grids = ROWS.map((row) => {
+    const ks = S.filter((r) => r.method === row.m).map((r) => r.knob);
+    return `${row.name} ${row.set.split(" = ")[0]} = ${knob(ks[0])}–${knob(ks[ks.length - 1])}`;
+  }).join(", ");
   document.getElementById("audit-note").innerHTML =
-    `Solid = better (accuracy up or bias down); pale = worse; grey = baseline → method. XGAUC: share of each user’s video pairs that the model ranks in watch-time order, weighted by the user’s number of candidates. Duration: per user, Jensen–Shannon divergence between the length mix of the top-10 and of the videos the user clicked on random exposure, over five equal-count length bins; 0 = same mix, 1 = disjoint [6]. MACR and IPS-feat vs Naive MF (clicks); D2Q vs VR (raw watch time, a label that itself favours long videos). One mid-grid setting per method. All changes significant (paired 95% bootstrap over test users) unless marked ns.`;
+    `<b>Rows.</b> Each method’s knob is swept over a grid (${grids}); each row shows one setting from the middle of its grid, neither the weakest nor the strongest correction (IPS-feat at clip = ${ROWS[1].k} keeps ${Math.round(100 * ROWS[1].r.diag.ips_ess_share)}% of the effective sample size). MACR and IPS-feat vs Naive MF (clicks); D2Q vs VR (raw watch time, a label that itself favours long videos).<br>` +
+    `<b>Metrics.</b> XGAUC: share of each user’s video pairs ranked in watch-time order, weighted by the user’s number of candidates. Duration: per user, JSD between the length mix of the top-10 and of the user’s clicks under random exposure (five equal-count length bins; 0 = same mix, 1 = disjoint) [6].`;
 }
 </script>

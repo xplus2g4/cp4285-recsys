@@ -1,14 +1,18 @@
 <style>
   footer { margin-top: auto; display: grid; grid-template-columns: 1fr auto; gap: 70px; align-items: center; border-top: 10px solid var(--rule); padding-top: 30px; }
   .refs { font-size: 28px; color: var(--sub); line-height: 1.5; }
-  .sponsors { display: flex; align-items: center; gap: 80px; margin-top: 26px; }
+  .sponsors { display: flex; align-items: center; gap: 130px; margin-top: 26px; }
   .sponsors .mono { font-size: 25px; letter-spacing: .08em; text-transform: uppercase; color: var(--sub); }
+  .sponsors .tier { display: flex; align-items: center; gap: 60px; }
+  .sponsors .tier b { font-family: Fraunces; font-weight: 800; font-size: 34px; }
   .sponsors img { display: block; }
-  /* heights equalise the visible marks; negative margins cancel the transparent padding baked into two of the files */
+  /* heights equalise the visible marks; negative margins cancel the transparent padding baked into some of the files */
   #sp-dsta { height: 84px; }
   #sp-garena { height: 64px; }
   #sp-sea { height: 117px; margin: -17px -10px; }
   #sp-tealseed { height: 150px; margin: -28px; }
+  #sp-sginnovate { height: 84px; }
+  #sp-simsys { height: 144px; margin: -32px -2px -28px -19px; }
   .qr { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .qr img { display: block; width: 287px; height: 287px; }
   .qr .vote { font-family: Fraunces; font-weight: 800; font-size: 44px; line-height: 1; white-space: nowrap; }
@@ -18,12 +22,18 @@
 <!-- image paths resolve against v3-poster.html, not this file -->
 <footer>
   <div>
-    <div class="refs">[1] Gao et al., KuaiRand, CIKM ’22 · [2] Chen et al., Bias and Debias in Recommender System: A Survey, TOIS ’23 · [3] Wei et al., MACR, KDD ’21 · [4] Schnabel et al., Recommendations as Treatments (IPS), ICML ’16 · [5] Zhan et al., Deconfounding Duration Bias in Watch-time Prediction (D2Q), KDD ’22 · [6] Abdollahpouri et al., User-centered Evaluation of Popularity Bias, UMAP ’21. VR: MF regressing raw watch time, D2Q’s baseline [5].</div>
+    <div class="refs">[1] Gao et al., KuaiRand, CIKM ’22 · [2] Chen et al., Bias and Debias in Recommender System: A Survey, TOIS ’23 · [3] Wei et al., MACR, KDD ’21 · [4] Schnabel et al., Recommendations as Treatments (IPS), ICML ’16 · [5] Zhan et al., Deconfounding Duration Bias in Watch-time Prediction (D2Q), KDD ’22 · [6] Abdollahpouri et al., User-centered Evaluation of Popularity Bias, UMAP ’21</div>
     <div class="sponsors"><span class="mono">Sponsors</span>
-      <img id="sp-sea" src="assets/sponsor-sea-group.png" alt="Sea">
-      <img id="sp-garena" src="assets/sponsor-garena.png" alt="Garena">
-      <img id="sp-dsta" src="assets/sponsor-dsta.png" alt="DSTA">
-      <img id="sp-tealseed" src="assets/sponsor-tealseed.png" alt="Tealseed">
+      <div class="tier"><b>Platinum</b>
+        <img id="sp-sea" src="assets/sponsor-sea-group.png" alt="Sea">
+        <img id="sp-garena" src="assets/sponsor-garena.png" alt="Garena">
+        <img id="sp-dsta" src="assets/sponsor-dsta.png" alt="DSTA">
+        <img id="sp-tealseed" src="assets/sponsor-tealseed.png" alt="Tealseed">
+      </div>
+      <div class="tier"><b>Gold</b>
+        <img id="sp-sginnovate" src="assets/sponsor-sg-innovate.png" alt="SG Innovate">
+        <img id="sp-simsys" src="assets/sponsor-symsis.png" alt="Simsys">
+      </div>
     </div>
   </div>
   <div class="qr"><img src="assets/qr-steps-vote.svg" alt="QR code: uvents.nus.edu.sg/event/29th-steps/vote"><div class="vote">Vote for CP4285-<em>6</em>!</div></div>

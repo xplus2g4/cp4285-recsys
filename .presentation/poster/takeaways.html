@@ -9,9 +9,10 @@
   const c = (i, key) => cell(ROWS[i], COLS.find((x) => x.key === key));
   const accMax = (j) => Math.max(...ROWS.map((row) => Math.abs(cell(row, COLS[j]).p)));
   const biasMax = Math.max(...ROWS.flatMap((_, i) => ["pop", "exp", "dur"].map((b) => Math.abs(c(i, b).p))));
+  const long = (r) => 100 * (mean(r, "dur_bin_share@10[click].list_3") + mean(r, "dur_bin_share@10[click].list_4"));
   document.getElementById("takeaways").innerHTML = [
-    `<b>Targets move, one the wrong way.</b> MACR popularity ${pc(c(0, "pop").p)}, IPS-feat coverage ${pc(c(1, "exp").p)}, D2Q duration JSD ${pc(c(2, "dur").p)}.`,
-    `<b>Bias moves.</b> MACR coverage ${pc(c(0, "exp").p)} and duration ${pc(c(0, "dur").p)}, D2Q coverage ${pc(c(2, "exp").p)}; IPS-feat improves both others.`,
+    `<b>Removing a skew can overshoot.</b> D2Q cuts VR’s long videos (≥ ${F.dur_bin_range_s[3][0].toFixed(0)} s) from ${long(vr).toFixed(0)}% to ${long(ROWS[2].r).toFixed(0)}%, past what users click, so its duration JSD worsens by ${Math.abs(c(2, "dur").p).toFixed(1)}%.`,
+    `<b>Evaluate every bias, not just the target.</b> MACR and D2Q pay for their fix in coverage (${pc(c(0, "exp").p)}, ${pc(c(2, "exp").p)}), so choosing a debiasing method is likely a <span style="white-space:nowrap">trade-off</span>, not a ranking on one score.`,
     `<b>Accuracy is blind.</b> NDCG@10 moves by at most ${accMax(0).toFixed(1)}% and XGAUC by ${accMax(1).toFixed(1)}%, while bias metrics move by up to ${biasMax.toFixed(0)}%.`,
   ].map((t) => `<li><span>${t}</span></li>`).join("");
 }
